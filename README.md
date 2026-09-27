@@ -41,7 +41,9 @@ Compares a local instance against the verified manifest and reports drift:
 | `foreign`    | Unlisted file inside a managed directory |
 | `unreadable` | Could not be read                        |
 
-CurseForge mods are checked by exact filename, file size, and the SHA-1 checksum published by CurseForge. The scanner also reports unlisted `.jar` files; matching jar counts alone are not considered sufficient.
+The exported `modlist.html` is the project catalog: the maintainer tool parses each CurseForge link, searches the CurseForge API by its slug, and verifies the resolved project IDs exactly match the pinned `projectID`/`fileID` pairs in the CurseForge export. It then resolves the pinned files, not an unreviewed “latest” file. This uses the public project links as the lookup source without requiring a share code from players.
+
+CurseForge files are checked by exact filename, destination, file size, and the SHA-1 checksum published by CurseForge. Mods, texture packs, and shaders install to their respective instance folders. The scanner also reports unlisted `.jar` files; matching jar counts alone are not considered sufficient. Data packs are world-specific, so they are listed as manual assets until a world target is selected.
 
 ### Sync and update
 
@@ -136,7 +138,7 @@ The client reads `releases/latest/download`, so **publishing a release is what s
 
 ### Automated
 
-Run the **Publish pack manifest** workflow (`workflow_dispatch`) with a pack version. It resolves CurseForge project/file IDs, records exact filenames, sizes, SHA-1 checksums and distribution permissions, hashes the override files, signs the manifest, verifies it, and publishes the release. Override download URLs are pinned to the source commit.
+Run the **Publish pack manifest** workflow (`workflow_dispatch`) with a pack version. It parses `modlist.html`, looks up every slug through the CurseForge API, cross-checks projects against the exported file pins, records category destinations, exact filenames, sizes, SHA-1 checksums and distribution permissions, hashes the override files, signs the manifest, verifies it, and publishes the release. Override download URLs are pinned to the source commit. Re-running a version publishes a unique manifest release tag, so a metadata refresh does not require a pack-version bump.
 
 Requires repository secrets **`CURSEFORGE_API_KEY`** (an approved key for the launcher/third-party API use) and **`MARS_SIGNING_KEY`** (the hex contents of the signing private key). Store the API key in the local `.env` for maintainer CLI runs; never commit `.env` or put the API key in client build settings.
 
@@ -178,7 +180,7 @@ manifest_tool build <instance-root> <version> <manifest-out>    # hash a working
   "generatedAt": "2026-09-27T16:08:16Z",
 
   // Fully owned by Mars Command; unlisted files here are reported as foreign.
-  "managedDirs": ["config", "kubejs", "defaultconfigs"],
+  "managedDirs": ["config", "kubejs", "defaultconfigs", "mods", "resourcepacks", "shaderpacks"],
 
   "files": [
     {
@@ -194,12 +196,13 @@ manifest_tool build <instance-root> <version> <manifest-out>    # hash a working
     }
   ],
 
-  // CurseForge file details resolved at publish time. Mods use the API's SHA-1.
+  // File details resolved from modlist.html links and export pins at publish time.
   "curseforgeMods": [
     {
       "projectId": 401648,
       "fileId": 5873258,
       "required": true,
+      "installDir": "mods",
       "fileName": "example-mod.jar",
       "size": 123456,
       "sha1": "...",
@@ -208,6 +211,8 @@ manifest_tool build <instance-root> <version> <manifest-out>    # hash a working
       "sourcePage": "https://www.curseforge.com/..."
     }
   ],
+  // null means it is world-specific and requires manual placement.
+  // installDir can also be "resourcepacks" or "shaderpacks".
   "modsDir": "mods"
 }
 ```
@@ -242,6 +247,7 @@ Resolving CurseForge at publish time instead keeps the key in CI, removes the ru
 - **Older manifests are not installable.** A manifest containing only CurseForge IDs lacks the filenames, checksums, and URLs required for safe sync; publish a refreshed manifest before using Sync.
 - **CurseForge SHA-1 is used for mod files.** Config and override files use SHA-256. All expected checksums are covered by the signed manifest.
 - **Non-distributable mods require manual installation.** The launcher will not bypass CurseForge's `allowModDistribution` setting.
+- **Data packs require a world target.** The launcher does not guess which save should receive them, so it reports those as manual rather than placing them in an inactive folder.
 - **Sync has no progress bar or cancellation yet.** It processes downloads on a worker thread and reports results when complete.
 - **No launching.** The gate is enforced, but the launch path is unimplemented.
 - **Scanning is unthrottled** — roughly 14 s for ~1300 files, with no progress reporting.

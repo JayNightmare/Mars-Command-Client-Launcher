@@ -51,6 +51,7 @@ pub struct IntegrityReport {
     pub modified_count: u32,
     pub foreign_count: u32,
     pub unreadable_count: u32,
+    pub manual_unresolved: u32,
     /// Mods pinned by CurseForge id. These carry no hash, so only presence is
     /// compared by count.
     pub mods_expected: u32,
@@ -75,6 +76,7 @@ impl IntegrityReport {
             modified_count: 0,
             foreign_count: 0,
             unreadable_count: 0,
+            manual_unresolved: 0,
             mods_expected: 0,
             mods_present: 0,
             mods_foreign: 0,
@@ -135,7 +137,9 @@ pub fn scan(root: &Path, manifest: &Manifest) -> IntegrityReport {
                 + manifest
                     .curseforge_mods
                     .iter()
-                    .filter(|file| file.required)
+                    .filter(|file| {
+                        file.required && (file.install_dir.is_some() || !file.manual_download)
+                    })
                     .count(),
         )
         .unwrap_or(u32::MAX),
@@ -145,14 +149,8 @@ pub fn scan(root: &Path, manifest: &Manifest) -> IntegrityReport {
         modified_count: 0,
         foreign_count: 0,
         unreadable_count: 0,
-        mods_expected: u32::try_from(
-            manifest
-                .curseforge_mods
-                .iter()
-                .filter(|file| file.required)
-                .count(),
-        )
-        .unwrap_or(u32::MAX),
+        manual_unresolved: 0,
+        mods_expected: u32::try_from(required_mods(manifest).count()).unwrap_or(u32::MAX),
         mods_present: 0,
         mods_foreign: 0,
         mods_fully_verified: false,
@@ -160,14 +158,14 @@ pub fn scan(root: &Path, manifest: &Manifest) -> IntegrityReport {
         error: None,
     };
 
-    let mut expected: HashSet<&str> = HashSet::with_capacity(manifest.files.len());
+    let mut expected: HashSet<String> = HashSet::with_capacity(manifest.files.len());
 
     for entry in &manifest.files {
         // Defence in depth: the manifest was validated, but never join unchecked.
         if !is_safe_relative_path(&entry.path) {
             continue;
         }
-        expected.insert(entry.path.as_str());
+        expected.insert(entry.path.clone());
 
         let absolute = resolve(root, &entry.path);
         let verdict = match std::fs::metadata(&absolute) {
@@ -186,9 +184,18 @@ pub fn scan(root: &Path, manifest: &Manifest) -> IntegrityReport {
         report.record(entry.path.clone(), verdict);
     }
 
-    scan_mods(root, manifest, &mut report);
+    scan_curseforge_assets(root, manifest, &mut report, &mut expected);
 
-    for dir in &manifest.managed_dirs {
+    let mut managed_dirs = manifest.managed_dirs.clone();
+    managed_dirs.extend(manifest.curseforge_mods.iter().filter_map(|file| {
+        file.install_dir.clone().or_else(|| {
+            (!file.manual_download)
+                .then(|| manifest.mods_dir.clone().unwrap_or_else(|| "mods".into()))
+        })
+    }));
+    managed_dirs.sort();
+    managed_dirs.dedup();
+    for dir in &managed_dirs {
         if !is_safe_relative_path(dir) {
             continue;
         }
@@ -226,30 +233,6 @@ fn resolve(root: &Path, relative: &str) -> PathBuf {
     path
 }
 
-fn count_jars(root: &Path, mods_dir: Option<&str>) -> u32 {
-    let Some(dir) = mods_dir.filter(|dir| is_safe_relative_path(dir)) else {
-        return 0;
-    };
-    let base = resolve(root, dir);
-    if !base.is_dir() {
-        return 0;
-    }
-
-    std::fs::read_dir(base)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .filter(|entry| {
-                    entry
-                        .path()
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("jar"))
-                })
-                .count() as u32
-        })
-        .unwrap_or(0)
-}
-
 fn hash_file_sha1(path: &Path) -> std::io::Result<String> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -271,96 +254,117 @@ fn hash_file_sha1(path: &Path) -> std::io::Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn scan_mods(root: &Path, manifest: &Manifest, report: &mut IntegrityReport) {
+fn required_mods<'a>(
+    manifest: &'a Manifest,
+) -> impl Iterator<Item = &'a crate::manifest::CurseForgeMod> {
     let mods_dir = manifest.mods_dir.as_deref().unwrap_or("mods");
-    if !is_safe_relative_path(mods_dir) {
-        report.error = Some("Unsafe mods directory in manifest".into());
-        return;
-    }
+    manifest.curseforge_mods.iter().filter(move |file| {
+        file.required
+            && match file.install_dir.as_deref() {
+                Some(dir) => dir == mods_dir,
+                None => !file.manual_download,
+            }
+    })
+}
 
-    let has_complete_pins = manifest
-        .curseforge_mods
+fn scan_curseforge_assets(
+    root: &Path,
+    manifest: &Manifest,
+    report: &mut IntegrityReport,
+    expected: &mut HashSet<String>,
+) {
+    let mods_dir = manifest.mods_dir.as_deref().unwrap_or("mods");
+    let mod_files: Vec<_> = required_mods(manifest).collect();
+    report.mods_expected = u32::try_from(mod_files.len()).unwrap_or(u32::MAX);
+    report.mods_fully_verified = mod_files
         .iter()
-        .all(|file| !file.required || (file.file_name.is_some() && file.sha1.is_some()));
-    report.mods_fully_verified = has_complete_pins;
-    let has_any_pin_metadata = manifest
-        .curseforge_mods
-        .iter()
-        .any(|file| file.file_name.is_some() || file.sha1.is_some());
-    if !has_any_pin_metadata {
-        report.mods_present = count_jars(root, Some(mods_dir));
-        report.ok_count += report.mods_present.min(report.mods_expected);
-        report.mods_foreign = report.mods_present.saturating_sub(report.mods_expected);
-        return;
-    }
+        .all(|file| file.file_name.is_some() && file.sha1.is_some());
 
-    let mut expected_names = HashSet::new();
+    let mut expected_mod_names = HashSet::new();
     for file in &manifest.curseforge_mods {
+        let install_dir = match file.install_dir.as_deref() {
+            Some(dir) => Some(dir),
+            None if file.manual_download => None,
+            None => Some(mods_dir),
+        };
+        let Some(install_dir) = install_dir else {
+            if file.required && file.manual_download {
+                report.manual_unresolved += 1;
+            }
+            continue;
+        };
+        if !is_safe_relative_path(install_dir) {
+            report.error = Some(format!(
+                "Unsafe CurseForge install directory: {install_dir}"
+            ));
+            continue;
+        }
         let Some(file_name) = file.file_name.as_deref() else {
-            if file.required {
+            if file.required && file.manual_download {
+                report.manual_unresolved += 1;
+            } else if file.required {
                 report.record(
-                    format!("{mods_dir}/unresolved-{}.jar", file.file_id),
+                    format!("{install_dir}/unresolved-{}.jar", file.file_id),
                     FileVerdict::Unreadable,
                 );
             }
             continue;
         };
-        expected_names.insert(file_name.to_ascii_lowercase());
-        if !file.required {
-            continue;
-        }
-        let relative = format!("{mods_dir}/{file_name}");
+        let relative = format!("{install_dir}/{file_name}");
         if !is_safe_relative_path(&relative) {
             report.error = Some(format!("Unsafe CurseForge path: {relative}"));
             continue;
         }
-
-        let path = resolve(root, &relative);
+        expected.insert(relative.clone());
+        if install_dir == mods_dir {
+            expected_mod_names.insert(file_name.to_ascii_lowercase());
+        }
+        if !file.required {
+            continue;
+        }
         let Some(expected_hash) = file.sha1.as_deref() else {
-            if file.required {
+            if file.required && file.manual_download {
+                report.manual_unresolved += 1;
+            } else if file.required {
                 report.record(relative, FileVerdict::Unreadable);
             }
             continue;
         };
-        match std::fs::metadata(&path) {
-            Err(_) if file.required => report.record(relative, FileVerdict::Missing),
-            Err(_) => {}
-            Ok(metadata) if !metadata.is_file() => report.record(relative, FileVerdict::Corrupt),
+        let path = resolve(root, &relative);
+        let verdict = match std::fs::metadata(&path) {
+            Err(_) => FileVerdict::Missing,
+            Ok(metadata) if !metadata.is_file() => FileVerdict::Corrupt,
             Ok(metadata) if file.size.is_some_and(|size| metadata.len() != size) => {
-                report.record(relative, FileVerdict::Corrupt)
+                FileVerdict::Corrupt
             }
             Ok(_) => match hash_file_sha1(&path) {
                 Ok(hash) if hash.eq_ignore_ascii_case(expected_hash) => {
-                    if file.required {
+                    if install_dir == mods_dir {
                         report.mods_present += 1;
                     }
-                    report.record(relative, FileVerdict::Ok);
+                    FileVerdict::Ok
                 }
-                Ok(_) => report.record(relative, FileVerdict::Corrupt),
-                Err(_) => report.record(relative, FileVerdict::Unreadable),
+                Ok(_) => FileVerdict::Corrupt,
+                Err(_) => FileVerdict::Unreadable,
             },
-        }
+        };
+        report.record(relative, verdict);
     }
 
     let mods_path = resolve(root, mods_dir);
-    let Ok(entries) = std::fs::read_dir(mods_path) else {
-        return;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        if !path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("jar"))
-        {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        if !expected_names.contains(&name) {
-            report.mods_foreign += 1;
-            report.record(
-                format!("{mods_dir}/{}", entry.file_name().to_string_lossy()),
-                FileVerdict::Foreign,
-            );
+    if let Ok(entries) = std::fs::read_dir(mods_path) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if !path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("jar"))
+            {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if !expected_mod_names.contains(&name) {
+                report.mods_foreign += 1;
+            }
         }
     }
 }
@@ -368,7 +372,7 @@ fn scan_mods(root: &Path, manifest: &Manifest, report: &mut IntegrityReport) {
 fn collect_foreign(
     root: &Path,
     managed_dir: &str,
-    expected: &HashSet<&str>,
+    expected: &HashSet<String>,
     report: &mut IntegrityReport,
 ) {
     let base = resolve(root, managed_dir);
@@ -408,6 +412,7 @@ mod tests {
             project_id,
             file_id,
             required: true,
+            install_dir: Some("mods".into()),
             file_name: Some(name.into()),
             size: Some(content.len() as u64),
             sha1: Some(hex::encode(Sha1::digest(content))),
@@ -445,6 +450,66 @@ mod tests {
         assert_eq!(report.mods_present, 1);
         assert_eq!(report.mods_foreign, 1);
         assert_eq!(report.missing_count, 1);
+        assert!(report.mods_fully_verified);
+    }
+
+    #[test]
+    fn verifies_assets_in_their_category_directory() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("resourcepacks")).unwrap();
+        std::fs::write(
+            root.path().join("resourcepacks/icons.zip"),
+            b"resource pack",
+        )
+        .unwrap();
+        let hash = hex::encode(Sha1::digest(b"resource pack"));
+        let mut asset = mod_entry(3, 30, "icons.zip", b"resource pack");
+        asset.install_dir = Some("resourcepacks".into());
+        asset.sha1 = Some(hash);
+
+        let manifest = Manifest {
+            schema_version: 1,
+            pack_version: "1.0.0".into(),
+            minecraft_version: "1.21.1".into(),
+            loader: "neoforge".into(),
+            loader_version: "21.1.250".into(),
+            generated_at: "2026-01-01T00:00:00Z".into(),
+            managed_dirs: vec!["resourcepacks".into()],
+            files: Vec::new(),
+            curseforge_mods: vec![asset],
+            mods_dir: Some("mods".into()),
+        };
+
+        let report = scan(root.path(), &manifest);
+        assert_eq!(report.ok_count, 1);
+        assert_eq!(report.mods_expected, 0);
+        assert_eq!(report.mods_present, 0);
+        assert_eq!(report.manual_unresolved, 0);
+    }
+
+    #[test]
+    fn leaves_world_specific_data_packs_manual_and_unresolved() {
+        let root = tempfile::tempdir().unwrap();
+        let mut asset = mod_entry(4, 40, "mars-world.zip", b"world datapack");
+        asset.install_dir = None;
+        asset.manual_download = true;
+
+        let manifest = Manifest {
+            schema_version: 1,
+            pack_version: "1.0.0".into(),
+            minecraft_version: "1.21.1".into(),
+            loader: "neoforge".into(),
+            loader_version: "21.1.250".into(),
+            generated_at: "2026-01-01T00:00:00Z".into(),
+            managed_dirs: Vec::new(),
+            files: Vec::new(),
+            curseforge_mods: vec![asset],
+            mods_dir: Some("mods".into()),
+        };
+
+        let report = scan(root.path(), &manifest);
+        assert_eq!(report.manual_unresolved, 1);
+        assert_eq!(report.mods_expected, 0);
         assert!(report.mods_fully_verified);
     }
 }

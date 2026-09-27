@@ -38,6 +38,7 @@ export type IntegrityReport = {
 	modifiedCount: number;
 	foreignCount: number;
 	unreadableCount: number;
+	manualUnresolved: number;
 	modsExpected: number;
 	modsPresent: number;
 	modsForeign: number;

@@ -103,6 +103,8 @@ pub struct CurseForgeMod {
     #[serde(default = "default_true")]
     pub required: bool,
     #[serde(default)]
+    pub install_dir: Option<String>,
+    #[serde(default)]
     pub file_name: Option<String>,
     #[serde(default)]
     pub size: Option<u64>,
@@ -186,7 +188,17 @@ impl ManifestStatus {
                         .count(),
             )
             .ok(),
-            mod_count: u32::try_from(manifest.curseforge_mods.len()).ok(),
+            mod_count: u32::try_from(
+                manifest
+                    .curseforge_mods
+                    .iter()
+                    .filter(|file| match file.install_dir.as_deref() {
+                        Some(dir) => dir == "mods",
+                        None => !file.manual_download,
+                    })
+                    .count(),
+            )
+            .ok(),
             generated_at: Some(manifest.generated_at.clone()),
             fetched_at: crate::now_rfc3339(),
             error: None,
@@ -254,13 +266,27 @@ fn validate(manifest: &Manifest) -> Result<(), String> {
     }
 
     for file in &manifest.curseforge_mods {
+        if let Some(install_dir) = &file.install_dir {
+            if !is_safe_relative_path(install_dir) {
+                return Err(format!(
+                    "Unsafe CurseForge install directory: {install_dir}"
+                ));
+            }
+        }
         if let Some(name) = &file.file_name {
             if !is_safe_relative_path(name) || name.contains('/') {
                 return Err(format!("Unsafe CurseForge file name: {name}"));
             }
-            let path = format!("{}/{name}", manifest.mods_dir.as_deref().unwrap_or("mods"));
-            if !paths.insert(path.to_ascii_lowercase()) {
-                return Err(format!("Duplicate manifest path: {path}"));
+            let install_dir = match file.install_dir.as_deref() {
+                Some(dir) => Some(dir),
+                None if file.manual_download => None,
+                None => manifest.mods_dir.as_deref().or(Some("mods")),
+            };
+            if let Some(install_dir) = install_dir {
+                let path = format!("{install_dir}/{name}");
+                if !paths.insert(path.to_ascii_lowercase()) {
+                    return Err(format!("Duplicate manifest path: {path}"));
+                }
             }
         }
         if let Some(sha1) = &file.sha1 {

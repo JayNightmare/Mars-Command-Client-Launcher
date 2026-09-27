@@ -98,7 +98,8 @@ struct InstalledState {
 }
 
 struct PackFile {
-    path: String,
+    path: Option<String>,
+    label: String,
     size: Option<u64>,
     hash_algorithm: HashAlgorithm,
     hash: String,
@@ -111,7 +112,8 @@ struct PackFile {
 impl From<&ManifestFile> for PackFile {
     fn from(file: &ManifestFile) -> Self {
         Self {
-            path: file.path.clone(),
+            path: Some(file.path.clone()),
+            label: file.path.clone(),
             size: Some(file.size),
             hash_algorithm: HashAlgorithm::Sha256,
             hash: file.sha256.clone(),
@@ -141,8 +143,15 @@ fn mod_pack_file(file: &CurseForgeMod, mods_dir: &str) -> Result<PackFile, Strin
         .as_deref()
         .ok_or_else(|| format!("CurseForge file {} has no SHA-1 checksum", file.file_id))?;
 
+    let install_dir = match file.install_dir.as_deref() {
+        Some(dir) => Some(dir),
+        None if file.manual_download => None,
+        None => Some(mods_dir),
+    };
+    let path = install_dir.map(|dir| format!("{dir}/{file_name}"));
     Ok(PackFile {
-        path: format!("{mods_dir}/{file_name}"),
+        path,
+        label: file_name.to_string(),
         size: file.size,
         hash_algorithm: HashAlgorithm::Sha1,
         hash: hash.to_string(),
@@ -166,11 +175,13 @@ fn desired_files(manifest: &Manifest) -> Result<Vec<PackFile>, String> {
     }
     let mut paths = HashSet::with_capacity(desired.len());
     for file in &desired {
-        if !is_safe_relative_path(&file.path) {
-            return Err(format!("Unsafe path in manifest: {}", file.path));
-        }
-        if !paths.insert(file.path.to_ascii_lowercase()) {
-            return Err(format!("Duplicate path in manifest: {}", file.path));
+        if let Some(path) = &file.path {
+            if !is_safe_relative_path(path) {
+                return Err(format!("Unsafe path in manifest: {path}"));
+            }
+            if !paths.insert(path.to_ascii_lowercase()) {
+                return Err(format!("Duplicate path in manifest: {path}"));
+            }
         }
     }
     Ok(desired)
@@ -178,8 +189,17 @@ fn desired_files(manifest: &Manifest) -> Result<Vec<PackFile>, String> {
 
 fn roots_for(manifest: &Manifest) -> Vec<String> {
     let mut roots = manifest.managed_dirs.clone();
-    if !manifest.curseforge_mods.is_empty() {
-        roots.push(manifest.mods_dir.clone().unwrap_or_else(|| "mods".into()));
+    for file in &manifest.curseforge_mods {
+        let dir = match file.install_dir.as_deref() {
+            Some(dir) => Some(dir),
+            None if file.manual_download => None,
+            None => manifest.mods_dir.as_deref().or(Some("mods")),
+        };
+        if let Some(dir) = dir {
+            if is_safe_relative_path(dir) {
+                roots.push(dir.to_string());
+            }
+        }
     }
     roots.sort();
     roots.dedup();
@@ -313,7 +333,11 @@ fn download_file(
     if !url.starts_with("https://") {
         return Err("Refusing a non-HTTPS download URL".into());
     }
-    let target = destination(root, &file.path)?;
+    let relative = file
+        .path
+        .as_deref()
+        .ok_or_else(|| "File has no automatic install destination".to_string())?;
+    let target = destination(root, relative)?;
     let mut response = client
         .get(url)
         .send()
@@ -445,12 +469,28 @@ fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
     let mut desired_paths = HashSet::with_capacity(desired.len());
 
     for file in &desired {
-        desired_paths.insert(file.path.clone());
-        let target = match destination(&root, &file.path) {
+        let Some(relative) = file.path.as_deref() else {
+            if file.required && file.manual {
+                result.manual_count += 1;
+                result.issue(
+                    file.label.clone(),
+                    "This asset must be installed into a specific world manually",
+                );
+            } else if file.required {
+                result.failed_count += 1;
+                result.issue(
+                    file.label.clone(),
+                    "No install destination is present in the manifest",
+                );
+            }
+            continue;
+        };
+        desired_paths.insert(relative.to_string());
+        let target = match destination(&root, relative) {
             Ok(target) => target,
             Err(err) => {
                 result.failed_count += 1;
-                result.issue(file.path.clone(), err);
+                result.issue(relative.to_string(), err);
                 continue;
             }
         };
@@ -458,7 +498,7 @@ fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
             Ok(current) => current,
             Err(err) => {
                 result.failed_count += 1;
-                result.issue(file.path.clone(), err);
+                result.issue(relative.to_string(), err);
                 continue;
             }
         };
@@ -468,7 +508,7 @@ fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
         }) {
             result.unchanged_count += 1;
             next_state.files.insert(
-                file.path.clone(),
+                relative.to_string(),
                 AppliedFile {
                     hash_algorithm: file.hash_algorithm,
                     hash: file.hash.clone(),
@@ -478,14 +518,14 @@ fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
         }
 
         if !file.required && current.is_none() {
-            next_state.files.remove(&file.path);
+            next_state.files.remove(relative);
             continue;
         }
         if file.manual {
             if file.required {
                 result.manual_count += 1;
                 result.issue(
-                    file.path.clone(),
+                    relative.to_string(),
                     "This file must be installed manually from its source page",
                 );
             }
@@ -495,14 +535,14 @@ fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
             if file.required {
                 result.failed_count += 1;
                 result.issue(
-                    file.path.clone(),
+                    relative.to_string(),
                     "No download URL is present in the signed manifest",
                 );
             }
             continue;
         }
         if file.mutable && current.is_some() {
-            let unchanged_since_last_sync = previous.files.get(&file.path).is_some_and(|applied| {
+            let unchanged_since_last_sync = previous.files.get(relative).is_some_and(|applied| {
                 applied.hash_algorithm == file.hash_algorithm
                     && current
                         .as_ref()
@@ -511,7 +551,7 @@ fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
             if !unchanged_since_last_sync {
                 result.conflict_count += 1;
                 result.issue(
-                    file.path.clone(),
+                    relative.to_string(),
                     "Local config was changed; preserved instead of overwriting",
                 );
                 continue;
@@ -526,7 +566,7 @@ fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
                     result.installed_count += 1;
                 }
                 next_state.files.insert(
-                    file.path.clone(),
+                    relative.to_string(),
                     AppliedFile {
                         hash_algorithm: file.hash_algorithm,
                         hash: file.hash.clone(),
@@ -535,7 +575,7 @@ fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
             }
             Err(err) => {
                 result.failed_count += 1;
-                result.issue(file.path.clone(), err);
+                result.issue(relative.to_string(), err);
             }
         }
     }
@@ -683,6 +723,7 @@ mod tests {
                 project_id: 1,
                 file_id: 2,
                 required: true,
+                install_dir: None,
                 file_name: None,
                 size: None,
                 sha1: None,

@@ -51,6 +51,14 @@ export function evaluateLaunch(
 		};
 	}
 
+	if (report.manualUnresolved > 0) {
+		return {
+			ready: false,
+			reason: "MANUAL ASSET UNRESOLVED",
+			detail: `${report.manualUnresolved} asset${report.manualUnresolved === 1 ? "" : "s"} need world-specific placement or verification.`,
+		};
+	}
+
 	if (!report.modsFullyVerified) {
 		return {
 			ready: false,
