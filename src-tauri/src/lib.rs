@@ -2,6 +2,7 @@ mod integrity;
 pub mod manifest;
 mod minecraft;
 mod settings;
+mod sync;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -47,6 +48,32 @@ fn get_client_settings(app: AppHandle) -> ClientSettings {
     settings::load(&app)
 }
 
+#[tauri::command]
+fn auto_detect_instance_root(app: AppHandle) -> Result<Option<String>, String> {
+    let mut current = settings::load(&app);
+    if let Some(root) = current.instance_root.as_ref() {
+        let root = PathBuf::from(root);
+        if settings::is_minecraft_game_dir(&root) {
+            return Ok(Some(root.to_string_lossy().to_string()));
+        }
+        let nested_game_dir = root.join("minecraft");
+        if settings::is_minecraft_game_dir(&nested_game_dir) {
+            let nested_game_dir = nested_game_dir.to_string_lossy().to_string();
+            current.instance_root = Some(nested_game_dir.clone());
+            settings::save(&app, &current)?;
+            return Ok(Some(nested_game_dir));
+        }
+    }
+
+    let Some(root) = settings::detect_curseforge_mars_instance() else {
+        return Ok(None);
+    };
+    let root = root.to_string_lossy().to_string();
+    current.instance_root = Some(root.clone());
+    settings::save(&app, &current)?;
+    Ok(Some(root))
+}
+
 /// Opens a native folder picker and persists the result. `None` means the user
 /// cancelled; the previous value is left untouched.
 #[tauri::command]
@@ -54,7 +81,7 @@ async fn choose_instance_root(app: AppHandle) -> Result<Option<String>, String> 
     let picked = app
         .dialog()
         .file()
-        .set_title("Select the managed Mars instance folder")
+        .set_title("Select the Minecraft game folder containing mods or config")
         .blocking_pick_folder();
 
     let Some(folder) = picked else {
@@ -108,6 +135,28 @@ async fn scan_instance(
         .map_err(|err| format!("Integrity scan failed: {err}"))
 }
 
+#[tauri::command]
+async fn sync_instance(
+    app: AppHandle,
+    state: State<'_, ManifestState>,
+) -> Result<sync::SyncResult, String> {
+    let Some(manifest) = state.0.lock().unwrap().clone() else {
+        return Ok(sync::SyncResult::failed(
+            String::new(),
+            "No verified manifest is loaded".into(),
+        ));
+    };
+
+    let Some(root) = settings::load(&app).instance_root else {
+        return Ok(sync::SyncResult::failed(
+            manifest.pack_version,
+            "No Minecraft game folder selected".into(),
+        ));
+    };
+
+    Ok(sync::sync_pack(PathBuf::from(root), manifest).await)
+}
+
 /// Best-effort native backdrop. Silently no-ops where the effect is
 /// unsupported so the CSS acrylic fallback stays intact.
 #[cfg(target_os = "windows")]
@@ -144,9 +193,11 @@ pub fn run() {
             get_minecraft_status,
             refresh_manifest,
             get_client_settings,
+            auto_detect_instance_root,
             choose_instance_root,
             clear_instance_root,
-            scan_instance
+            scan_instance,
+            sync_instance
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

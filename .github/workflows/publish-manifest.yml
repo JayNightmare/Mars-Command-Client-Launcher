@@ -1,14 +1,10 @@
 name: Publish pack manifest
 
-# Builds a signed manifest from the CurseForge export in `modpack/` and
-# publishes it as a release. The launcher reads `releases/latest/download`,
-# so publishing a release is what ships a pack update to users.
-
 on:
     workflow_dispatch:
         inputs:
             pack_version:
-                description: "Pack version (e.g. 1.2.0)"
+                description: "Pack version (e.g. 1.3.0)"
                 required: true
             export_dir:
                 description: "Path to the CurseForge export directory"
@@ -36,7 +32,17 @@ jobs:
 
             - name: Build manifest from CurseForge export
               working-directory: src-tauri
+              env:
+                  CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+                  CURSEFORGE_API_URL: https://api.curseforge.com
+                  EXPORT_DIR: ${{ inputs.export_dir }}
               run: |
+                  if [ -z "$CURSEFORGE_API_KEY" ]; then
+                    echo "::error::CURSEFORGE_API_KEY secret is not set"
+                    exit 1
+                  fi
+                  ENCODED_EXPORT_DIR="$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["EXPORT_DIR"], safe="/"))')"
+                  export MARS_OVERRIDE_BASE_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/${ENCODED_EXPORT_DIR}/overrides"
                   mkdir -p ../manifest-dist
                   cargo run --release --example manifest_tool -- \
                     cf-pack "../${{ inputs.export_dir }}" \
@@ -52,7 +58,6 @@ jobs:
                     echo "::error::MARS_SIGNING_KEY secret is not set"
                     exit 1
                   fi
-                  # Key file is written outside the workspace and removed immediately after.
                   KEY_FILE="$(mktemp)"
                   printf '%s' "$MARS_SIGNING_KEY" > "$KEY_FILE"
                   cargo run --release --example manifest_tool -- sign "$KEY_FILE" ../manifest-dist/manifest.json
@@ -65,7 +70,7 @@ jobs:
             - name: Publish release
               uses: softprops/action-gh-release@v2
               with:
-                  tag_name: pack-v${{ inputs.pack_version }}
+                  tag_name: pack-v${{ inputs.pack_version }}-manifest-${{ github.run_number }}
                   name: Mars Pack ${{ inputs.pack_version }}
                   prerelease: ${{ inputs.prerelease }}
                   files: |

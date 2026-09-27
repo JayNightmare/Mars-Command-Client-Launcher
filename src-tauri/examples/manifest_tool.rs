@@ -10,6 +10,7 @@
 //! (hashing `overrides/` and pinning mods by project/file id). `sign` writes a
 //! detached `<manifest>.sig` over the exact bytes of the manifest file.
 
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +26,7 @@ const LOADER: &str = "neoforge";
 const LOADER_VERSION: &str = "21.1.0";
 
 fn main() {
+    load_local_env();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("keygen") => keygen(args.get(1)),
@@ -84,22 +86,12 @@ fn cf_pack(
         .map(|(a, b)| (a.to_string(), b.to_string()))
         .unwrap_or_else(|| (LOADER.to_string(), LOADER_VERSION.to_string()));
 
-    let mods: Vec<serde_json::Value> = cf
+    let mod_entries: Vec<serde_json::Value> = cf
         .get("files")
         .and_then(|v| v.as_array())
-        .map(|files| {
-            files
-                .iter()
-                .filter_map(|entry| {
-                    Some(serde_json::json!({
-                        "projectId": entry.get("projectID")?.as_u64()?,
-                        "fileId": entry.get("fileID")?.as_u64()?,
-                        "required": entry.get("required").and_then(|v| v.as_bool()).unwrap_or(true),
-                    }))
-                })
-                .collect()
-        })
+        .map(|files| files.iter().cloned().collect())
         .unwrap_or_default();
+    let mods = resolve_curseforge_mods(&mod_entries)?;
 
     let overrides_name = cf
         .get("overrides")
@@ -110,6 +102,15 @@ fn cf_pack(
     let mut files = Vec::new();
     for dir in OVERRIDE_MANAGED_DIRS {
         collect_hashed(&overrides_root, dir, &mut files)?;
+    }
+    let override_base = std::env::var("MARS_OVERRIDE_BASE_URL").unwrap_or_else(|_| {
+        "https://raw.githubusercontent.com/JayNightmare/Mars-Command-Client-Launcher/main/modpack/Mars%20Client/overrides".to_string()
+    });
+    for file in &mut files {
+        let path = file["path"]
+            .as_str()
+            .ok_or_else(|| "Override path is missing".to_string())?;
+        file["downloadUrl"] = serde_json::Value::String(append_url_path(&override_base, path)?);
     }
     files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
 
@@ -140,12 +141,202 @@ fn cf_pack(
     Ok(())
 }
 
+fn load_local_env() {
+    for path in [Path::new(".env"), Path::new("../.env")] {
+        if path.is_file() {
+            let _ = dotenvy::from_path(path);
+            break;
+        }
+    }
+}
+
+fn append_url_path(base: &str, relative: &str) -> Result<String, String> {
+    let mut url = url::Url::parse(base).map_err(|_| "Invalid override base URL".to_string())?;
+    if url.scheme() != "https" {
+        return Err("Override base URL must use HTTPS".into());
+    }
+    let mut segments = url
+        .path_segments_mut()
+        .map_err(|_| "Invalid override base URL".to_string())?;
+    segments.pop_if_empty();
+    for segment in relative.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err("Unsafe override path".into());
+        }
+        segments.push(segment);
+    }
+    drop(segments);
+    Ok(url.to_string())
+}
+
+fn resolve_curseforge_mods(
+    entries: &[serde_json::Value],
+) -> Result<Vec<serde_json::Value>, String> {
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let key = std::env::var("CURSEFORGE_API_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "CURSEFORGE_API_KEY is required to resolve CurseForge files".to_string())?;
+    let base = std::env::var("CURSEFORGE_API_URL")
+        .unwrap_or_else(|_| "https://api.curseforge.com".to_string());
+    if !base.starts_with("https://") {
+        return Err("CURSEFORGE_API_URL must use HTTPS".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(concat!("mars-manifest-tool/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|err| format!("Could not create CurseForge API client: {err}"))?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| format!("Could not start CurseForge API runtime: {err}"))?;
+    runtime.block_on(resolve_curseforge_mods_async(&client, &base, &key, entries))
+}
+
+async fn api_post(
+    client: &reqwest::Client,
+    base: &str,
+    key: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let response = client
+        .post(format!("{}{}", base.trim_end_matches('/'), path))
+        .header("x-api-key", key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|err| format!("CurseForge request failed: {err}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "CurseForge API returned HTTP {} for {path}",
+            response.status().as_u16()
+        ));
+    }
+    response
+        .json()
+        .await
+        .map_err(|err| format!("CurseForge returned invalid JSON for {path}: {err}"))
+}
+
+async fn resolve_curseforge_mods_async(
+    client: &reqwest::Client,
+    base: &str,
+    key: &str,
+    entries: &[serde_json::Value],
+) -> Result<Vec<serde_json::Value>, String> {
+    let mut project_ids = HashSet::new();
+    let mut file_ids = HashSet::new();
+    for entry in entries {
+        project_ids.insert(
+            entry
+                .get("projectID")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| "CurseForge export contains an invalid projectID".to_string())?,
+        );
+        file_ids.insert(
+            entry
+                .get("fileID")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| "CurseForge export contains an invalid fileID".to_string())?,
+        );
+    }
+
+    let mut mods_by_id = HashMap::new();
+    for chunk in project_ids.into_iter().collect::<Vec<_>>().chunks(50) {
+        let response = api_post(
+            client,
+            base,
+            key,
+            "/v1/mods",
+            serde_json::json!({"modIds": chunk, "filterPcOnly": true}),
+        )
+        .await?;
+        for item in response["data"].as_array().into_iter().flatten() {
+            if let Some(id) = item.get("id").and_then(serde_json::Value::as_u64) {
+                mods_by_id.insert(id, item.clone());
+            }
+        }
+    }
+
+    let mut files_by_id = HashMap::new();
+    for chunk in file_ids.into_iter().collect::<Vec<_>>().chunks(50) {
+        let response = api_post(
+            client,
+            base,
+            key,
+            "/v1/mods/files",
+            serde_json::json!({"fileIds": chunk}),
+        )
+        .await?;
+        for item in response["data"].as_array().into_iter().flatten() {
+            if let Some(id) = item.get("id").and_then(serde_json::Value::as_u64) {
+                files_by_id.insert(id, item.clone());
+            }
+        }
+    }
+
+    entries
+        .iter()
+        .map(|entry| {
+            let project_id = entry["projectID"].as_u64().unwrap_or_default();
+            let file_id = entry["fileID"].as_u64().unwrap_or_default();
+            let mod_info = mods_by_id
+                .get(&project_id)
+                .ok_or_else(|| format!("CurseForge project {project_id} was not found"))?;
+            let file = files_by_id
+                .get(&file_id)
+                .ok_or_else(|| format!("CurseForge file {file_id} was not found"))?;
+            if file["modId"].as_u64() != Some(project_id) {
+                return Err(format!("CurseForge file {file_id} does not belong to project {project_id}"));
+            }
+            if file["isAvailable"].as_bool() == Some(false) {
+                return Err(format!("CurseForge file {file_id} is unavailable"));
+            }
+
+            let file_name = file["fileName"].as_str().unwrap_or_default();
+            if file_name.is_empty() || file_name.contains(['/', '\\']) {
+                return Err(format!("CurseForge file {file_id} has an unsafe filename"));
+            }
+            let sha1 = file["hashes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|hash| hash["algo"].as_u64() == Some(1))
+                .and_then(|hash| hash["value"].as_str());
+            let allowed = mod_info["allowModDistribution"].as_bool() == Some(true);
+            let download_url = file["downloadUrl"].as_str().filter(|url| url.starts_with("https://"));
+            let manual_download = !allowed || download_url.is_none() || sha1.is_none();
+            let website = mod_info["links"]["websiteUrl"].as_str().unwrap_or_default();
+            let source_page = if !website.is_empty() {
+                format!("{}/files/{file_id}", website.trim_end_matches('/'))
+            } else {
+                format!("https://www.curseforge.com/minecraft/mc-mods/{}/files/{file_id}",
+                    mod_info["slug"].as_str().unwrap_or(""))
+            };
+
+            Ok(serde_json::json!({
+                "projectId": project_id,
+                "fileId": file_id,
+                "required": entry["required"].as_bool().unwrap_or(true),
+                "fileName": file_name,
+                "size": file["fileLength"].as_u64(),
+                "sha1": sha1,
+                "downloadUrl": if manual_download { None::<String> } else { download_url.map(str::to_owned) },
+                "manualDownload": manual_download,
+                "sourcePage": source_page,
+            }))
+        })
+        .collect()
+}
+
 /// Hashes every file under `<root>/<dir>`, recording paths relative to `root`.
-fn collect_hashed(
-    root: &Path,
-    dir: &str,
-    out: &mut Vec<serde_json::Value>,
-) -> Result<(), String> {
+fn collect_hashed(root: &Path, dir: &str, out: &mut Vec<serde_json::Value>) -> Result<(), String> {
     let base = root.join(dir);
     if !base.is_dir() {
         return Ok(());
@@ -173,7 +364,7 @@ fn collect_hashed(
             "size": size,
             "required": true,
             // Config is expected to be tweaked locally; scripts are not.
-            "mutable": dir == "config" || dir == "defaultconfigs",
+            "mutable": true,
             "side": "client",
             "downloadUrl": serde_json::Value::Null,
             "manualDownload": false,
@@ -201,7 +392,9 @@ fn keygen(out: Option<&String>) -> Result<(), String> {
     let signing = SigningKey::generate(&mut rand_core::OsRng);
 
     if Path::new(out).exists() {
-        return Err(format!("{out} already exists; refusing to overwrite a signing key"));
+        return Err(format!(
+            "{out} already exists; refusing to overwrite a signing key"
+        ));
     }
     if let Some(parent) = Path::new(out).parent() {
         std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
@@ -227,9 +420,13 @@ fn load_signing_key(path: &str) -> Result<SigningKey, String> {
 }
 
 fn sign(key_path: Option<&String>, manifest_path: Option<&String>) -> Result<(), String> {
-    let (key_path, manifest_path) = (key_path.ok_or_else(usage)?, manifest_path.ok_or_else(usage)?);
+    let (key_path, manifest_path) = (
+        key_path.ok_or_else(usage)?,
+        manifest_path.ok_or_else(usage)?,
+    );
     let signing = load_signing_key(key_path)?;
-    let body = std::fs::read(manifest_path).map_err(|err| format!("Could not read manifest: {err}"))?;
+    let body =
+        std::fs::read(manifest_path).map_err(|err| format!("Could not read manifest: {err}"))?;
 
     let signature = signing.sign(&body);
     let out = format!("{manifest_path}.sig");
@@ -280,7 +477,7 @@ fn build(
                 "size": size,
                 "required": true,
                 // Config is expected to be tweaked locally; mods are not.
-                "mutable": *dir == "config" || *dir == "defaultconfigs",
+                "mutable": *dir != "mods",
                 "side": "client",
                 // Populated by a CurseForge/Modrinth importer, not by a local scan.
                 "downloadUrl": serde_json::Value::Null,

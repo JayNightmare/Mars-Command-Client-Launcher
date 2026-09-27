@@ -29,7 +29,7 @@ export function evaluateLaunch(
 		return {
 			ready: false,
 			reason: "NO INSTANCE SELECTED",
-			detail: "Select your Mars instance folder so it can be verified.",
+			detail: "Select your Minecraft game folder so it can be verified.",
 		};
 	}
 
@@ -51,11 +51,27 @@ export function evaluateLaunch(
 		};
 	}
 
+	if (!report.modsFullyVerified) {
+		return {
+			ready: false,
+			reason: "MANIFEST NEEDS MOD HASHES",
+			detail: "This release only lists CurseForge IDs. Sync a refreshed signed manifest to verify exact mod files.",
+		};
+	}
+
 	if (report.modsPresent !== report.modsExpected) {
 		return {
 			ready: false,
-			reason: "MOD COUNT MISMATCH",
-			detail: `Expected ${report.modsExpected} mods, found ${report.modsPresent}.`,
+			reason: "MOD FILE MISMATCH",
+			detail: `Expected ${report.modsExpected} verified mods, found ${report.modsPresent}.`,
+		};
+	}
+
+	if (report.modsForeign > 0) {
+		return {
+			ready: false,
+			reason: "UNMANAGED MODS FOUND",
+			detail: `Remove or resolve ${report.modsForeign} mod file${report.modsForeign === 1 ? "" : "s"} not listed in the pack.`,
 		};
 	}
 

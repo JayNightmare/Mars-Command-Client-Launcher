@@ -2,7 +2,7 @@
 
 A desktop companion client for the **Mars** modded Minecraft server, built with Tauri v2, React, TypeScript and Tailwind CSS v4.
 
-The client currently provides live server telemetry and signed pack-integrity verification. It does **not** yet download mods or launch the game.
+The client provides live server telemetry, signed pack verification, and a **Sync / update pack** action that installs or updates verified mods and overrides. Launching Minecraft is not implemented yet.
 
 |           |                                            |
 | --------- | ------------------------------------------ |
@@ -40,6 +40,14 @@ Compares a local instance against the verified manifest and reports drift:
 | `modified`   | Differs, but declared user-editable      |
 | `foreign`    | Unlisted file inside a managed directory |
 | `unreadable` | Could not be read                        |
+
+CurseForge mods are checked by exact filename, file size, and the SHA-1 checksum published by CurseForge. The scanner also reports unlisted `.jar` files; matching jar counts alone are not considered sufficient.
+
+### Sync and update
+
+Sync downloads only missing or outdated files, stages each file beside its destination, validates its size and checksum, and replaces the destination only after verification. Downloads come directly from the HTTPS URLs in the signed manifest; the CurseForge API key is used only by the release workflow, never by the launcher.
+
+For `mutable` config files, an update is applied only when the local file still matches the version previously installed by Mars Command. Locally edited configs are preserved and reported as conflicts. Removed managed files are deleted only when they still match the last installed checksum. Files that CurseForge does not allow to be distributed must be fetched manually from their source page.
 
 ### Launch gating
 
@@ -86,6 +94,7 @@ src-tauri/src/
   manifest.rs      Schema, fetch, Ed25519 verification
   integrity.rs     Local scan and drift report
   settings.rs      Persisted client settings
+  sync.rs          Staged downloads, checksum verification, conflict handling
   lib.rs           Tauri commands and managed state
 src-tauri/examples/
   manifest_tool.rs Maintainer CLI (not shipped in the app)
@@ -98,16 +107,20 @@ src-tauri/examples/
 | `get_minecraft_status(host, port)` | `MinecraftServerStatus` |
 | `refresh_manifest()`               | `ManifestStatus`        |
 | `scan_instance()`                  | `IntegrityReport`       |
+| `sync_instance()`                  | `SyncResult`            |
 | `get_client_settings()`            | `ClientSettings`        |
 | `choose_instance_root()`           | `string` or `null`      |
 | `clear_instance_root()`            | —                       |
 
 ### Build-time configuration
 
-| Variable                   | Default                                                                                 |
+| Variable | Default |
 | -------------------------- | --------------------------------------------------------------------------------------- |
-| `MARS_MANIFEST_BASE_URL`   | `https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases/latest/download` |
-| `MARS_MANIFEST_PUBLIC_KEY` | Hex Ed25519 key compiled into `manifest.rs`                                             |
+| `MARS_MANIFEST_BASE_URL` | `https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases/latest/download` |
+| `MARS_MANIFEST_PUBLIC_KEY` | Hex Ed25519 key compiled into `manifest.rs` |
+| `CURSEFORGE_API_KEY` | Maintainer-only API key used by the manifest tool; never shipped in the app |
+| `CURSEFORGE_API_URL` | `https://api.curseforge.com` |
+| `MARS_OVERRIDE_BASE_URL` | HTTPS base URL for the committed CurseForge `overrides/` files |
 
 Useful for testing against a local manifest server:
 
@@ -123,16 +136,16 @@ The client reads `releases/latest/download`, so **publishing a release is what s
 
 ### Automated
 
-Run the **Publish pack manifest** workflow (`workflow_dispatch`) with a pack version. It builds, signs, verifies and publishes the release.
+Run the **Publish pack manifest** workflow (`workflow_dispatch`) with a pack version. It resolves CurseForge project/file IDs, records exact filenames, sizes, SHA-1 checksums and distribution permissions, hashes the override files, signs the manifest, verifies it, and publishes the release. Override download URLs are pinned to the source commit.
 
-Requires the repository secret **`MARS_SIGNING_KEY`** — the hex contents of your private signing key.
+Requires repository secrets **`CURSEFORGE_API_KEY`** (an approved key for the launcher/third-party API use) and **`MARS_SIGNING_KEY`** (the hex contents of the signing private key). Store the API key in the local `.env` for maintainer CLI runs; never commit `.env` or put the API key in client build settings.
 
 ### Manual
 
 ```bash
 cd src-tauri
 
-# 1. Convert the CurseForge export (hashes overrides/, pins mods by id)
+# 1. Convert the CurseForge export (requires CURSEFORGE_API_KEY in the environment or root .env)
 cargo run --example manifest_tool -- cf-pack "../modpack/Mars Client" 1.2.0 ../manifest-dist/manifest.json
 
 # 2. Sign it
@@ -175,15 +188,25 @@ manifest_tool build <instance-root> <version> <manifest-out>    # hash a working
       "required": true,
       "mutable": true,                 // drift reported, never treated as corruption
       "side": "client",
-      "downloadUrl": null,             // HTTPS only when present
+      "downloadUrl": "https://...",    // HTTPS only; raw override URL
       "manualDownload": false,         // upstream forbids automated download
       "sourcePage": null
     }
   ],
 
-  // Immutable CurseForge pins. No hashes available, so verified by count.
+  // CurseForge file details resolved at publish time. Mods use the API's SHA-1.
   "curseforgeMods": [
-    { "projectId": 401648, "fileId": 5873258, "required": true }
+    {
+      "projectId": 401648,
+      "fileId": 5873258,
+      "required": true,
+      "fileName": "example-mod.jar",
+      "size": 123456,
+      "sha1": "...",
+      "downloadUrl": "https://...",
+      "manualDownload": false,
+      "sourcePage": "https://www.curseforge.com/..."
+    }
   ],
   "modsDir": "mods"
 }
@@ -216,8 +239,10 @@ Resolving CurseForge at publish time instead keeps the key in CI, removes the ru
 
 ## Known limitations
 
-- **Mods are count-verified, not content-verified.** A CurseForge export pins mods by `projectID`/`fileID` but carries no filenames or hashes, so a swapped jar of equal count goes undetected. Resolving this needs a CurseForge API key (for `fileFingerprint`) or a one-time download-and-hash pass.
-- **No downloading or repair.** The client reports drift; it cannot fix it yet.
+- **Older manifests are not installable.** A manifest containing only CurseForge IDs lacks the filenames, checksums, and URLs required for safe sync; publish a refreshed manifest before using Sync.
+- **CurseForge SHA-1 is used for mod files.** Config and override files use SHA-256. All expected checksums are covered by the signed manifest.
+- **Non-distributable mods require manual installation.** The launcher will not bypass CurseForge's `allowModDistribution` setting.
+- **Sync has no progress bar or cancellation yet.** It processes downloads on a worker thread and reports results when complete.
 - **No launching.** The gate is enforced, but the launch path is unimplemented.
 - **Scanning is unthrottled** — roughly 14 s for ~1300 files, with no progress reporting.
 - **No key rotation path.** A rotated signing key requires a client rebuild.
@@ -228,7 +253,7 @@ Resolving CurseForge at publish time instead keeps the key in CI, removes the ru
 
 ## Roadmap
 
-1. **Verified downloading** — fetch only drifted files, stream to a temp path, verify SHA-256 *before* moving into place, and never delete anything outside `managedDirs`. Files with `manualDownload: true` open `sourcePage` instead.
+1. Progress reporting, cancellation, and conflict resolution UI for pack sync.
 2. Prism / vanilla launcher integration and the launch path itself.
 3. Voice relay (`voice.nexusgit.info`).
 4. Diagnostics screen surfacing the preserved error detail.

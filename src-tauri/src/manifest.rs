@@ -102,6 +102,18 @@ pub struct CurseForgeMod {
     pub file_id: u32,
     #[serde(default = "default_true")]
     pub required: bool,
+    #[serde(default)]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub sha1: Option<String>,
+    #[serde(default)]
+    pub download_url: Option<String>,
+    #[serde(default)]
+    pub manual_download: bool,
+    #[serde(default)]
+    pub source_page: Option<String>,
 }
 
 /// UI-facing outcome of a manifest refresh. Never carries the file list.
@@ -153,9 +165,25 @@ impl ManifestStatus {
             minecraft_version: Some(manifest.minecraft_version.clone()),
             loader_version: Some(manifest.loader_version.clone()),
             file_count: u32::try_from(manifest.files.len()).ok(),
-            managed_bytes: Some(manifest.files.iter().map(|file| file.size).sum()),
+            managed_bytes: Some(
+                manifest
+                    .files
+                    .iter()
+                    .map(|file| file.size)
+                    .chain(manifest.curseforge_mods.iter().filter_map(|file| file.size))
+                    .fold(0u64, u64::saturating_add),
+            ),
             manual_download_count: u32::try_from(
-                manifest.files.iter().filter(|file| file.manual_download).count(),
+                manifest
+                    .files
+                    .iter()
+                    .filter(|file| file.manual_download)
+                    .count()
+                    + manifest
+                        .curseforge_mods
+                        .iter()
+                        .filter(|file| file.manual_download)
+                        .count(),
             )
             .ok(),
             mod_count: u32::try_from(manifest.curseforge_mods.len()).ok(),
@@ -202,9 +230,13 @@ fn validate(manifest: &Manifest) -> Result<(), String> {
         }
     }
 
+    let mut paths = std::collections::HashSet::new();
     for file in &manifest.files {
         if !is_safe_relative_path(&file.path) {
             return Err(format!("Unsafe file path in manifest: {}", file.path));
+        }
+        if !paths.insert(file.path.to_ascii_lowercase()) {
+            return Err(format!("Duplicate manifest path: {}", file.path));
         }
         if file.sha256.len() != 64 || !file.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(format!("Invalid SHA-256 for {}", file.path));
@@ -221,6 +253,43 @@ fn validate(manifest: &Manifest) -> Result<(), String> {
         }
     }
 
+    for file in &manifest.curseforge_mods {
+        if let Some(name) = &file.file_name {
+            if !is_safe_relative_path(name) || name.contains('/') {
+                return Err(format!("Unsafe CurseForge file name: {name}"));
+            }
+            let path = format!("{}/{name}", manifest.mods_dir.as_deref().unwrap_or("mods"));
+            if !paths.insert(path.to_ascii_lowercase()) {
+                return Err(format!("Duplicate manifest path: {path}"));
+            }
+        }
+        if let Some(sha1) = &file.sha1 {
+            if sha1.len() != 40 || !sha1.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(format!(
+                    "Invalid SHA-1 for CurseForge file {}",
+                    file.file_id
+                ));
+            }
+        }
+        for url in [file.download_url.as_deref(), file.source_page.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if !url.starts_with("https://") {
+                return Err(format!(
+                    "Non-HTTPS URL for CurseForge file {}",
+                    file.file_id
+                ));
+            }
+        }
+        if !file.manual_download && file.file_name.is_some() && file.download_url.is_none() {
+            return Err(format!(
+                "Download URL missing for distributable CurseForge file {}",
+                file.file_id
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -233,7 +302,8 @@ fn verifying_key() -> Result<VerifyingKey, String> {
     if bytes.iter().all(|byte| *byte == 0) {
         return Err("No manifest signing key is configured for this build".into());
     }
-    VerifyingKey::from_bytes(&bytes).map_err(|_| "Manifest public key is not a valid Ed25519 key".into())
+    VerifyingKey::from_bytes(&bytes)
+        .map_err(|_| "Manifest public key is not a valid Ed25519 key".into())
 }
 
 /// Verifies a detached hex signature over the exact manifest bytes.
@@ -256,7 +326,10 @@ async fn get_text(client: &reqwest::Client, url: &str) -> Result<String, String>
         .map_err(|err| format!("Request failed: {err}"))?;
 
     if !response.status().is_success() {
-        return Err(format!("Server returned HTTP {}", response.status().as_u16()));
+        return Err(format!(
+            "Server returned HTTP {}",
+            response.status().as_u16()
+        ));
     }
 
     let bytes = response

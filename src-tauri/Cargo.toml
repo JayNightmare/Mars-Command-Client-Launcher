@@ -26,11 +26,15 @@ tokio = { version = "1", features = ["net", "io-util", "time", "rt"] }
 hickory-resolver = { version = "0.24", default-features = false, features = ["tokio-runtime", "system-config"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tauri-plugin-dialog = "2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "http2", "json", "blocking"] }
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 sha2 = "0.10"
+sha1 = "0.10"
 hex = "0.4"
 walkdir = "2"
+url = "2"
+dotenvy = "0.15"
+tempfile = "3"
 
 [dev-dependencies]
 rand_core = { version = "0.6", features = ["getrandom"] }

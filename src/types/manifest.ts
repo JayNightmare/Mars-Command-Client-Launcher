@@ -40,7 +40,28 @@ export type IntegrityReport = {
 	unreadableCount: number;
 	modsExpected: number;
 	modsPresent: number;
+	modsForeign: number;
+	modsFullyVerified: boolean;
 	drift: FileDrift[];
+	error: string | null;
+};
+
+export type SyncIssue = {
+	path: string;
+	reason: string;
+};
+
+export type SyncResult = {
+	packVersion: string;
+	installedCount: number;
+	updatedCount: number;
+	unchangedCount: number;
+	removedCount: number;
+	conflictCount: number;
+	manualCount: number;
+	failedCount: number;
+	complete: boolean;
+	issues: SyncIssue[];
 	error: string | null;
 };
 

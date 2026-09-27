@@ -1,19 +1,11 @@
-import {
-	Cloud,
-	Cpu,
-	Download,
-	Lock,
-	RefreshCw,
-	Settings,
-	Users,
-	Volume2,
-} from "lucide-react";
-import { useMemo } from "react";
+import { Cloud, Cpu, Users, Volume2 } from "lucide-react";
+import { useMemo, useState } from "react";
 import "./App.css";
 import "./index.css";
 import { DeploymentPanel } from "./components/DeploymentPanel";
 import { Panel } from "./components/Panel";
 import { ServerStatusPanel } from "./components/ServerStatusPanel";
+import { SettingsPage } from "./components/SettingsPage";
 import { StatusDot } from "./components/StatusDot";
 import { TitleBar } from "./components/TitleBar";
 import { useMarsServerStatus } from "./hooks/useMarsServerStatus";
@@ -65,6 +57,7 @@ function App() {
 		});
 
 	const pack = usePackIntegrity();
+	const [settingsOpen, setSettingsOpen] = useState(false);
 
 	const transmissions = useMemo<Transmission[]>(() => {
 		const motd = normalizeMotd(status?.motd);
@@ -88,9 +81,19 @@ function App() {
 	return (
 		<main className="h-screen overflow-hidden bg-[radial-gradient(circle_at_18%_0%,rgba(167,41,41,0.25),transparent_35%),radial-gradient(circle_at_88%_92%,rgba(30,112,133,0.17),transparent_36%),rgba(5,8,12,0.56)]">
 			<div className="mx-auto flex h-full max-w-[1400px] flex-col overflow-hidden border border-white/12 bg-slate-950/30 shadow-2xl shadow-black/40 backdrop-blur-xl">
-				<TitleBar />
+				<TitleBar
+					settingsOpen={settingsOpen}
+					onToggleSettings={() => setSettingsOpen((open) => !open)}
+				/>
 
-				<div className="grid min-h-0 flex-1 grid-cols-12 gap-3 p-3">
+				{settingsOpen ? (
+					<SettingsPage
+						pack={pack}
+						refreshingTelemetry={refreshing}
+						refreshTelemetry={refresh}
+					/>
+				) : (
+					<div className="grid min-h-0 flex-1 grid-cols-12 gap-3 p-3">
 					{/* Left rail */}
 					<aside className="col-span-3 flex min-h-0 flex-col gap-3">
 						<ServerStatusPanel
@@ -142,16 +145,7 @@ function App() {
 
 						<div className="flex-1" />
 
-						<button
-							type="button"
-							onClick={
-								pack.chooseInstanceRoot
-							}
-							className="flex shrink-0 items-center gap-2 rounded-lg border border-white/8 bg-white/5 px-3 py-2.5 text-[11px] text-slate-300 transition hover:bg-white/10 hover:text-white"
-						>
-							<Settings size={14} />
-							Instance folder
-						</button>
+
 					</aside>
 
 					{/* Centre column */}
@@ -284,81 +278,12 @@ function App() {
 							</p>
 						</Panel>
 
-						<Panel
-							title="Actions"
-							icon={
-								<Download
-									size={
-										14
-									}
-								/>
-							}
-							bodyClassName="space-y-2"
-						>
-							<button
-								type="button"
-								onClick={
-									refresh
-								}
-								disabled={
-									refreshing
-								}
-								className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/8 bg-white/5 px-3 py-2.5 text-left text-[11px] text-slate-200 transition hover:bg-white/10 disabled:cursor-wait disabled:text-slate-400"
-							>
-								<span className="truncate">
-									Refresh
-									telemetry
-								</span>
-								<RefreshCw
-									size={
-										14
-									}
-									className={`shrink-0 text-emerald-300 ${refreshing ? "animate-spin" : ""}`}
-								/>
-							</button>
-							<button
-								type="button"
-								onClick={
-									pack.refresh
-								}
-								disabled={
-									pack.busy
-								}
-								className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/8 bg-white/5 px-3 py-2.5 text-left text-[11px] text-slate-200 transition hover:bg-white/10 disabled:cursor-wait disabled:text-slate-400"
-							>
-								<span className="truncate">
-									Verify
-									pack
-									integrity
-								</span>
-								<RefreshCw
-									size={
-										14
-									}
-									className={`shrink-0 text-cyan-200 ${pack.busy ? "animate-spin" : ""}`}
-								/>
-							</button>
-							<button
-								type="button"
-								disabled
-								className="flex w-full cursor-not-allowed items-center justify-between gap-2 rounded-lg border border-white/8 bg-white/5 px-3 py-2.5 text-left text-[11px] text-slate-500"
-							>
-								<span className="truncate">
-									Repair
-									installation
-								</span>
-								<Lock
-									size={
-										14
-									}
-									className="shrink-0"
-								/>
-							</button>
-						</Panel>
+
 
 						<div className="flex-1" />
 					</aside>
-				</div>
+					</div>
+				)}
 
 				<footer className="flex h-8 shrink-0 items-center justify-between border-t border-white/8 px-4 text-[9px] tracking-[0.16em] text-slate-500">
 					<span>

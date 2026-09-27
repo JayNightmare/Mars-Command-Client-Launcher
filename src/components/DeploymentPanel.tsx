@@ -1,10 +1,7 @@
 import {
-	ArrowUpRight,
 	Boxes,
-	FolderOpen,
 	Gamepad2,
 	Lock,
-	RefreshCw,
 	ShieldCheck,
 	ShieldX,
 	TriangleAlert,
@@ -39,11 +36,12 @@ function severityOf(report: IntegrityReport | null): "clean" | "warn" | "bad" {
 		report.missingCount +
 			report.corruptCount +
 			report.unreadableCount >
-		0
+		0 ||
+		report.modsPresent !== report.modsExpected
 	) {
 		return "bad";
 	}
-	return report.modifiedCount + report.foreignCount > 0
+	return report.modifiedCount + report.foreignCount + report.modsForeign > 0
 		? "warn"
 		: "clean";
 }
@@ -65,10 +63,6 @@ export function DeploymentPanel({
 	manifest,
 	report,
 	instanceRoot,
-	busy,
-	refresh,
-	chooseInstanceRoot,
-	clearInstanceRoot,
 }: PackIntegrityState) {
 	const severity = severityOf(report);
 	const verified =
@@ -81,14 +75,14 @@ export function DeploymentPanel({
 			: 0;
 
 	const summary = manifest?.error
-		? "Manifest unavailable. Mars Command cannot confirm which files you should be running."
+		? "Manifest unavailable -> Mars Command cannot confirm which files you should be running"
 		: !instanceRoot
-			? "Select your Mars instance folder to compare local files against the signed manifest."
+			? "Choose the Minecraft game folder in Settings to compare local files against the signed manifest"
 			: severity === "clean"
-				? "All managed files match the approved manifest."
+				? "All managed files match the approved manifest"
 				: severity === "bad"
-					? "Local files diverge from the approved manifest. Repair is not available in this build."
-					: "Manifest verified. Some files differ but none are critical.";
+					? "Local files diverge from the approved manifest. Repair is not available in this build"
+					: "Manifest verified -> Some files differ but none are critical";
 
 	return (
 		<Panel
@@ -128,35 +122,6 @@ export function DeploymentPanel({
 							? "SIGNED"
 							: "UNVERIFIED"}
 					</p>
-				</div>
-
-				<div className="flex items-center gap-1.5">
-					<button
-						type="button"
-						onClick={chooseInstanceRoot}
-						className="flex items-center gap-1.5 rounded-lg border border-white/8 bg-white/5 text-[11px] text-slate-200 transition hover:bg-white/10"
-					>
-						<FolderOpen size={13} />
-						{instanceRoot
-							? "Change folder"
-							: "Select folder"}
-					</button>
-					<button
-						type="button"
-						onClick={refresh}
-						disabled={busy}
-						aria-label="Re-verify"
-						className="grid h-full w-[30px] justify-center place-items-center rounded-lg border border-white/8 text-slate-200 transition hover:bg-white/10 disabled:cursor-wait disabled:text-slate-500"
-					>
-						<RefreshCw
-							size={13}
-							className={
-								busy
-									? "animate-spin"
-									: ""
-							}
-						/>
-					</button>
 				</div>
 			</div>
 
@@ -248,24 +213,6 @@ export function DeploymentPanel({
 				) : null}
 			</div>
 
-			{instanceRoot ? (
-				<div className="mt-2 flex items-center gap-2">
-					<p
-						className="min-w-0 flex-1 truncate font-mono text-[10px] text-slate-500"
-						title={instanceRoot}
-					>
-						{instanceRoot}
-					</p>
-					<button
-						type="button"
-						onClick={clearInstanceRoot}
-						className="shrink-0 text-[10px] text-slate-500 transition hover:text-slate-300"
-					>
-						Forget
-					</button>
-				</div>
-			) : null}
-
 			{scanned && report.drift.length > 0 ? (
 				<ul className="mt-3 max-h-24 min-h-0 space-y-1 overflow-y-auto pr-1">
 					{report.drift
@@ -308,7 +255,10 @@ export function DeploymentPanel({
 							: "text-amber-200/80"
 					}`}
 				>
-					{gate.detail}
+					{gate.detail} {"->"}
+					{!gate.ready && gate.reason
+						? ` ${gate.reason}`
+						: ""}
 				</p>
 				<button
 					type="button"
@@ -331,8 +281,7 @@ export function DeploymentPanel({
 					)}
 					{gate.ready
 						? "LAUNCH SYSTEMS // NOT YET CONFIGURED"
-						: `LAUNCH LOCKED // ${gate.reason}`}
-					<ArrowUpRight size={15} />
+						: `LAUNCH LOCKED`}
 				</button>
 			</div>
 		</Panel>
