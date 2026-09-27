@@ -1,0 +1,49 @@
+{
+  "files": [
+    {
+      "downloadUrl": null,
+      "manualDownload": false,
+      "mutable": true,
+      "path": "config/mars-command.toml",
+      "required": true,
+      "sha256": "474eee332d4474389deafcbb1c20bcec0d9c11684ca94a14a93376fa015066e6",
+      "side": "client",
+      "size": 30,
+      "sourcePage": null
+    },
+    {
+      "downloadUrl": null,
+      "manualDownload": false,
+      "mutable": false,
+      "path": "mods/mars-core-1.0.0.jar",
+      "required": true,
+      "sha256": "e0e55488c104117895291554e3e57540802a9355de6aba6e414bda8670425a72",
+      "side": "client",
+      "size": 45,
+      "sourcePage": null
+    },
+    {
+      "downloadUrl": null,
+      "manualDownload": false,
+      "mutable": false,
+      "path": "mods/mars-hud-0.3.1.jar",
+      "required": true,
+      "sha256": "1f7118572576f4ca232ce22db1889b01debf2d1b8d2782f331f2a44c4e212ec1",
+      "side": "client",
+      "size": 28,
+      "sourcePage": null
+    }
+  ],
+  "generatedAt": "2026-09-27T15:41:39.803697100+00:00",
+  "loader": "neoforge",
+  "loaderVersion": "21.1.0",
+  "managedDirs": [
+    "mods",
+    "config",
+    "kubejs",
+    "defaultconfigs"
+  ],
+  "minecraftVersion": "1.21.1",
+  "packVersion": "1.0.0",
+  "schemaVersion": 1
+}
