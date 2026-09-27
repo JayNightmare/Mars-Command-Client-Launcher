@@ -1,0 +1,73 @@
+name: Publish pack manifest
+
+# Builds a signed manifest from the CurseForge export in `modpack/` and
+# publishes it as a release. The launcher reads `releases/latest/download`,
+# so publishing a release is what ships a pack update to users.
+
+on:
+    workflow_dispatch:
+        inputs:
+            pack_version:
+                description: "Pack version (e.g. 1.2.0)"
+                required: true
+            export_dir:
+                description: "Path to the CurseForge export directory"
+                required: true
+                default: "modpack/Mars Client"
+            prerelease:
+                description: "Publish as a pre-release (not served to users)"
+                type: boolean
+                default: false
+
+permissions:
+    contents: write
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: dtolnay/rust-toolchain@stable
+
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: src-tauri
+
+            - name: Build manifest from CurseForge export
+              working-directory: src-tauri
+              run: |
+                  mkdir -p ../manifest-dist
+                  cargo run --release --example manifest_tool -- \
+                    cf-pack "../${{ inputs.export_dir }}" \
+                    "${{ inputs.pack_version }}" \
+                    ../manifest-dist/manifest.json
+
+            - name: Sign manifest
+              working-directory: src-tauri
+              env:
+                  MARS_SIGNING_KEY: ${{ secrets.MARS_SIGNING_KEY }}
+              run: |
+                  if [ -z "$MARS_SIGNING_KEY" ]; then
+                    echo "::error::MARS_SIGNING_KEY secret is not set"
+                    exit 1
+                  fi
+                  # Key file is written outside the workspace and removed immediately after.
+                  KEY_FILE="$(mktemp)"
+                  printf '%s' "$MARS_SIGNING_KEY" > "$KEY_FILE"
+                  cargo run --release --example manifest_tool -- sign "$KEY_FILE" ../manifest-dist/manifest.json
+                  shred -u "$KEY_FILE" 2>/dev/null || rm -f "$KEY_FILE"
+
+            - name: Verify signature
+              working-directory: src-tauri
+              run: cargo run --release --example manifest_tool -- verify ../manifest-dist/manifest.json
+
+            - name: Publish release
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: pack-v${{ inputs.pack_version }}
+                  name: Mars Pack ${{ inputs.pack_version }}
+                  prerelease: ${{ inputs.prerelease }}
+                  files: |
+                      manifest-dist/manifest.json
+                      manifest-dist/manifest.json.sig

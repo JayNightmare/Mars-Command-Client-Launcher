@@ -8,10 +8,12 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 /// Base location of `manifest.json` and `manifest.json.sig`.
+/// `releases/latest/download` always resolves to the newest published release,
+/// so publishing a release is what ships a pack update.
 /// Override at build time with `MARS_MANIFEST_BASE_URL`.
 pub const MANIFEST_BASE_URL: &str = match option_env!("MARS_MANIFEST_BASE_URL") {
     Some(url) => url,
-    None => "https://raw.githubusercontent.com/JayNightmare/mars-command-manifest/main",
+    None => "https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases/latest/download",
 };
 
 /// Hex-encoded Ed25519 public key (32 bytes). Override at build time with
@@ -84,6 +86,22 @@ pub struct Manifest {
     #[serde(default)]
     pub managed_dirs: Vec<String>,
     pub files: Vec<ManifestFile>,
+    /// Mods pinned by CurseForge project/file id. These are immutable pins but
+    /// carry no hash, so they are counted rather than content-verified.
+    #[serde(default)]
+    pub curseforge_mods: Vec<CurseForgeMod>,
+    /// Directory the pinned mods install into, when `curseforge_mods` is used.
+    #[serde(default)]
+    pub mods_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseForgeMod {
+    pub project_id: u32,
+    pub file_id: u32,
+    #[serde(default = "default_true")]
+    pub required: bool,
 }
 
 /// UI-facing outcome of a manifest refresh. Never carries the file list.
@@ -101,6 +119,7 @@ pub struct ManifestStatus {
     /// Files the user must fetch themselves because automated distribution
     /// is disallowed upstream.
     pub manual_download_count: Option<u32>,
+    pub mod_count: Option<u32>,
     pub generated_at: Option<String>,
     pub fetched_at: String,
     pub error: Option<String>,
@@ -118,6 +137,7 @@ impl ManifestStatus {
             file_count: None,
             managed_bytes: None,
             manual_download_count: None,
+            mod_count: None,
             generated_at: None,
             fetched_at: crate::now_rfc3339(),
             error: Some(error),
@@ -138,6 +158,7 @@ impl ManifestStatus {
                 manifest.files.iter().filter(|file| file.manual_download).count(),
             )
             .ok(),
+            mod_count: u32::try_from(manifest.curseforge_mods.len()).ok(),
             generated_at: Some(manifest.generated_at.clone()),
             fetched_at: crate::now_rfc3339(),
             error: None,
@@ -172,6 +193,12 @@ fn validate(manifest: &Manifest) -> Result<(), String> {
     for dir in &manifest.managed_dirs {
         if !is_safe_relative_path(dir) {
             return Err(format!("Unsafe managed directory in manifest: {dir}"));
+        }
+    }
+
+    if let Some(mods_dir) = &manifest.mods_dir {
+        if !is_safe_relative_path(mods_dir) {
+            return Err(format!("Unsafe mods directory in manifest: {mods_dir}"));
         }
     }
 

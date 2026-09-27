@@ -3,6 +3,7 @@ import {
 	Boxes,
 	FolderOpen,
 	Gamepad2,
+	Lock,
 	RefreshCw,
 	ShieldCheck,
 	ShieldX,
@@ -10,6 +11,7 @@ import {
 } from "lucide-react";
 import { Panel } from "./Panel";
 import { EM_DASH, formatBytes, formatClock, formatNumber } from "../lib/format";
+import { evaluateLaunch } from "../lib/launch";
 import type { PackIntegrityState } from "../hooks/usePackIntegrity";
 import type { FileVerdict, IntegrityReport } from "../types/manifest";
 
@@ -72,6 +74,7 @@ export function DeploymentPanel({
 	const verified =
 		manifest?.available === true && manifest.signatureValid;
 	const scanned = report !== null && report.error === null;
+	const gate = evaluateLaunch(manifest, report, instanceRoot);
 	const progress =
 		scanned && report.totalFiles > 0
 			? Math.round((report.okCount / report.totalFiles) * 100)
@@ -191,12 +194,22 @@ export function DeploymentPanel({
 					/>
 				</div>
 
-				<dl className="mt-3 grid grid-cols-3 gap-3">
+				<dl className="mt-3 grid grid-cols-4 gap-3">
 					<Stat
 						label="Managed files"
 						value={formatNumber(
 							manifest?.fileCount,
 						)}
+					/>
+					<Stat
+						label="Mods"
+						value={
+							scanned
+								? `${report.modsPresent} / ${report.modsExpected}`
+								: formatNumber(
+										manifest?.modCount,
+									)
+						}
 					/>
 					<Stat
 						label="Managed size"
@@ -287,16 +300,41 @@ export function DeploymentPanel({
 				</ul>
 			) : null}
 
-			<button
-				type="button"
-				disabled
-				title="Downloading and launching are not implemented yet"
-				className="mt-auto flex w-full cursor-not-allowed items-center justify-center gap-2.5 rounded-xl border border-white/10 bg-white/5 px-4 py-3.5 text-[13px] font-bold tracking-[0.12em] text-slate-500"
-			>
-				<Gamepad2 size={18} />
-				LAUNCH SYSTEMS // NOT YET CONFIGURED
-				<ArrowUpRight size={15} />
-			</button>
+			<div className="mt-auto pt-3">
+				<p
+					className={`mb-2 text-center text-[10px] leading-4 ${
+						gate.ready
+							? "text-emerald-200/80"
+							: "text-amber-200/80"
+					}`}
+				>
+					{gate.detail}
+				</p>
+				<button
+					type="button"
+					disabled
+					title={
+						gate.ready
+							? "Pack verified. Launching is not implemented yet."
+							: gate.detail
+					}
+					className={`flex w-full cursor-not-allowed items-center justify-center gap-2.5 rounded-xl border px-4 py-3.5 text-[13px] font-bold tracking-[0.12em] ${
+						gate.ready
+							? "border-emerald-300/20 bg-emerald-400/10 text-emerald-200/70"
+							: "border-white/10 bg-white/5 text-slate-500"
+					}`}
+				>
+					{gate.ready ? (
+						<Gamepad2 size={18} />
+					) : (
+						<Lock size={16} />
+					)}
+					{gate.ready
+						? "LAUNCH SYSTEMS // NOT YET CONFIGURED"
+						: `LAUNCH LOCKED // ${gate.reason}`}
+					<ArrowUpRight size={15} />
+				</button>
+			</div>
 		</Panel>
 	);
 }

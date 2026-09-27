@@ -8,6 +8,7 @@ export type ManifestStatus = {
 	fileCount: number | null;
 	managedBytes: number | null;
 	manualDownloadCount: number | null;
+	modCount: number | null;
 	generatedAt: string | null;
 	fetchedAt: string;
 	error: string | null;
@@ -37,6 +38,8 @@ export type IntegrityReport = {
 	modifiedCount: number;
 	foreignCount: number;
 	unreadableCount: number;
+	modsExpected: number;
+	modsPresent: number;
 	drift: FileDrift[];
 	error: string | null;
 };

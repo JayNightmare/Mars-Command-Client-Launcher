@@ -175,3 +175,9 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+modpack/
+manifest-*
+# Generated manifest artifacts
+manifest-dist/
+manifest-test-instance/

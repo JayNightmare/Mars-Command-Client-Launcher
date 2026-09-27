@@ -50,6 +50,10 @@ pub struct IntegrityReport {
     pub modified_count: u32,
     pub foreign_count: u32,
     pub unreadable_count: u32,
+    /// Mods pinned by CurseForge id. These carry no hash, so only presence is
+    /// compared by count.
+    pub mods_expected: u32,
+    pub mods_present: u32,
     /// Capped list for display; counts above are always complete.
     pub drift: Vec<FileDrift>,
     pub error: Option<String>,
@@ -68,6 +72,8 @@ impl IntegrityReport {
             modified_count: 0,
             foreign_count: 0,
             unreadable_count: 0,
+            mods_expected: 0,
+            mods_present: 0,
             drift: Vec::new(),
             error: Some(error),
         }
@@ -119,6 +125,8 @@ pub fn scan(root: &Path, manifest: &Manifest) -> IntegrityReport {
         modified_count: 0,
         foreign_count: 0,
         unreadable_count: 0,
+        mods_expected: u32::try_from(manifest.curseforge_mods.len()).unwrap_or(u32::MAX),
+        mods_present: count_jars(root, manifest.mods_dir.as_deref()),
         drift: Vec::new(),
         error: None,
     };
@@ -187,6 +195,27 @@ fn resolve(root: &Path, relative: &str) -> PathBuf {
         path.push(segment);
     }
     path
+}
+
+fn count_jars(root: &Path, mods_dir: Option<&str>) -> u32 {
+    let Some(dir) = mods_dir.filter(|dir| is_safe_relative_path(dir)) else {
+        return 0;
+    };
+    let base = resolve(root, dir);
+    if !base.is_dir() {
+        return 0;
+    }
+
+    std::fs::read_dir(base)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry.path().extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jar"))
+                })
+                .count() as u32
+        })
+        .unwrap_or(0)
 }
 
 fn collect_foreign(
