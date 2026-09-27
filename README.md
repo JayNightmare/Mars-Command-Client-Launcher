@@ -4,12 +4,12 @@ A desktop companion client for the **Mars** modded Minecraft server, built with 
 
 The client currently provides live server telemetry and signed pack-integrity verification. It does **not** yet download mods or launch the game.
 
-| | |
-| --- | --- |
-| Server | `play.nexusgit.info` |
-| Minecraft | 1.21.1 |
-| Loader | NeoForge 21.1.250 |
-| Voice | `voice.nexusgit.info` *(not yet wired up)* |
+|           |                                            |
+| --------- | ------------------------------------------ |
+| Server    | `play.nexusgit.info`                       |
+| Minecraft | 1.21.1                                     |
+| Loader    | NeoForge 21.1.250                          |
+| Voice     | `voice.nexusgit.info` *(not yet wired up)* |
 
 ---
 
@@ -32,14 +32,14 @@ The launcher fetches a manifest describing every managed file, verifies an **Ed2
 
 Compares a local instance against the verified manifest and reports drift:
 
-| Verdict | Meaning |
-| --- | --- |
-| `ok` | Matches the manifest |
-| `missing` | Required file absent |
-| `corrupt` | Present but wrong contents |
-| `modified` | Differs, but declared user-editable |
-| `foreign` | Unlisted file inside a managed directory |
-| `unreadable` | Could not be read |
+| Verdict      | Meaning                                  |
+| ------------ | ---------------------------------------- |
+| `ok`         | Matches the manifest                     |
+| `missing`    | Required file absent                     |
+| `corrupt`    | Present but wrong contents               |
+| `modified`   | Differs, but declared user-editable      |
+| `foreign`    | Unlisted file inside a managed directory |
+| `unreadable` | Could not be read                        |
 
 ### Launch gating
 
@@ -93,21 +93,21 @@ src-tauri/examples/
 
 ### Tauri commands
 
-| Command | Returns |
-| --- | --- |
+| Command                            | Returns                 |
+| ---------------------------------- | ----------------------- |
 | `get_minecraft_status(host, port)` | `MinecraftServerStatus` |
-| `refresh_manifest()` | `ManifestStatus` |
-| `scan_instance()` | `IntegrityReport` |
-| `get_client_settings()` | `ClientSettings` |
-| `choose_instance_root()` | `string` or `null` |
-| `clear_instance_root()` | — |
+| `refresh_manifest()`               | `ManifestStatus`        |
+| `scan_instance()`                  | `IntegrityReport`       |
+| `get_client_settings()`            | `ClientSettings`        |
+| `choose_instance_root()`           | `string` or `null`      |
+| `clear_instance_root()`            | —                       |
 
 ### Build-time configuration
 
-| Variable | Default |
-| --- | --- |
-| `MARS_MANIFEST_BASE_URL` | `https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases/latest/download` |
-| `MARS_MANIFEST_PUBLIC_KEY` | Hex Ed25519 key compiled into `manifest.rs` |
+| Variable                   | Default                                                                                 |
+| -------------------------- | --------------------------------------------------------------------------------------- |
+| `MARS_MANIFEST_BASE_URL`   | `https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases/latest/download` |
+| `MARS_MANIFEST_PUBLIC_KEY` | Hex Ed25519 key compiled into `manifest.rs`                                             |
 
 Useful for testing against a local manifest server:
 
