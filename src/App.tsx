@@ -83,7 +83,9 @@ function App() {
 			<div className="mx-auto flex h-full max-w-[1400px] flex-col overflow-hidden border border-white/12 bg-slate-950/30 shadow-2xl shadow-black/40 backdrop-blur-xl">
 				<TitleBar
 					settingsOpen={settingsOpen}
-					onToggleSettings={() => setSettingsOpen((open) => !open)}
+					onToggleSettings={() =>
+						setSettingsOpen((open) => !open)
+					}
 				/>
 
 				{settingsOpen ? (
@@ -94,194 +96,213 @@ function App() {
 					/>
 				) : (
 					<div className="grid min-h-0 flex-1 grid-cols-12 gap-3 p-3">
-					{/* Left rail */}
-					<aside className="col-span-3 flex min-h-0 flex-col gap-3">
-						<ServerStatusPanel
-							status={status}
-							loading={loading}
-							refreshing={refreshing}
-							host={MARS_SERVER.host}
-						/>
+						{/* Left rail */}
+						<aside className="col-span-3 flex min-h-0 flex-col gap-3">
+							<ServerStatusPanel
+								status={status}
+								loading={
+									loading
+								}
+								refreshing={
+									refreshing
+								}
+								host={
+									MARS_SERVER.host
+								}
+							/>
 
-						<Panel
-							title="Mission Control"
-							icon={
-								<Volume2
-									size={
-										14
-									}
-								/>
-							}
-						>
-							<div className="space-y-2.5">
-								<div className="flex items-center justify-between">
-									<span className="text-[11px] text-slate-300">
-										Voice
-										relay
-									</span>
-									<span className="flex items-center gap-1.5 text-[10px] text-slate-500">
-										<StatusDot tone="idle" />
-										NOT
-										CONFIGURED
-									</span>
+							<Panel
+								title="Mission Control"
+								icon={
+									<Volume2
+										size={
+											14
+										}
+									/>
+								}
+							>
+								<div className="space-y-2.5">
+									<div className="flex items-center justify-between">
+										<span className="text-[11px] text-slate-300">
+											Voice
+											relay
+										</span>
+										<span className="flex items-center gap-1.5 text-[10px] text-slate-500">
+											<StatusDot tone="idle" />
+											NOT
+											CONFIGURED
+										</span>
+									</div>
+
+									<div className="rounded-lg border border-white/8 bg-black/15 px-2.5 py-2 font-mono text-[11px] text-slate-300">
+										{
+											MARS_SERVER.voiceEndpoint
+										}
+									</div>
+
+									<p className="text-[11px] leading-4 text-slate-400">
+										The
+										moon
+										has
+										been
+										informed
+										of
+										your
+										intended
+										arrival.
+									</p>
 								</div>
+							</Panel>
 
-								<div className="rounded-lg border border-white/8 bg-black/15 px-2.5 py-2 font-mono text-[11px] text-slate-300">
-									{
-										MARS_SERVER.voiceEndpoint
-									}
-								</div>
+							<div className="flex-1" />
+						</aside>
 
-								<p className="text-[11px] leading-4 text-slate-400">
-									The moon
-									has been
-									informed
-									of your
-									intended
-									arrival.
-								</p>
-							</div>
-						</Panel>
+						{/* Centre column */}
+						<section className="col-span-6 flex min-h-0 flex-col gap-3">
+							<DeploymentPanel
+								{...pack}
+							/>
 
-						<div className="flex-1" />
-
-
-					</aside>
-
-					{/* Centre column */}
-					<section className="col-span-6 flex min-h-0 flex-col gap-3">
-						<DeploymentPanel {...pack} />
-
-						{/* Absorbs vertical slack so no panel stretches into a void. */}
-						<Panel
-							title="Latest Transmission"
-							icon={
-								<Cloud
-									size={
-										14
-									}
-								/>
-							}
-							className="flex-1"
-							bodyClassName="overflow-y-auto pr-1"
-						>
-							<div className="space-y-2.5">
-								{transmissions.map(
-									(
-										entry,
-									) => (
-										<div
-											className="flex gap-2.5"
-											key={
-												entry.id
-											}
-										>
-											<span
-												className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-lg ${TRANSMISSION_DOT[entry.tone]}`}
-											/>
-											<div className="min-w-0">
-												<p className="text-[12px] font-medium text-slate-100">
-													{
-														entry.title
-													}
-												</p>
-												<p className="mt-0.5 text-[11px] leading-4 text-slate-400">
-													{
-														entry.body
-													}
-												</p>
+							{/* Absorbs vertical slack so no panel stretches into a void. */}
+							<Panel
+								title="Latest Transmission"
+								icon={
+									<Cloud
+										size={
+											14
+										}
+									/>
+								}
+								className="flex-1"
+								bodyClassName="overflow-y-auto pr-1"
+							>
+								<div className="space-y-2.5">
+									{transmissions.map(
+										(
+											entry,
+										) => (
+											<div
+												className="flex gap-2.5"
+												key={
+													entry.id
+												}
+											>
+												<span
+													className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-lg ${TRANSMISSION_DOT[entry.tone]}`}
+												/>
+												<div className="min-w-0">
+													<p className="text-[12px] font-medium text-slate-100">
+														{
+															entry.title
+														}
+													</p>
+													<p className="mt-0.5 text-[11px] leading-4 text-slate-400">
+														{
+															entry.body
+														}
+													</p>
+												</div>
 											</div>
-										</div>
-									),
-								)}
-							</div>
-						</Panel>
-					</section>
-
-					{/* Right rail */}
-					<aside className="col-span-3 flex min-h-0 flex-col gap-3">
-						<Panel
-							title="Client Telemetry"
-							icon={<Cpu size={14} />}
-						>
-							<div className="space-y-2">
-								<TelemetryRow
-									label="GAME"
-									value={
-										pack
-											.manifest
-											?.minecraftVersion ??
-										MARS_SERVER.minecraftVersion
-									}
-								/>
-								<TelemetryRow
-									label="LOADER"
-									value={`${MARS_SERVER.loader.toUpperCase()}${
-										pack
-											.manifest
-											?.loaderVersion
-											? ` ${pack.manifest.loaderVersion}`
-											: ""
-									}`}
-								/>
-								<TelemetryRow
-									label="SERVER BUILD"
-									value={
-										status?.versionName ??
-										EM_DASH
-									}
-								/>
-								<TelemetryRow
-									label="LAST CONTACT"
-									value={formatClock(
-										lastSuccessfulCheck,
+										),
 									)}
-								/>
-								<TelemetryRow
-									label="FILES"
-									value={
-										pendingFiles ===
-										null
-											? EM_DASH
-											: `${pendingFiles} PENDING`
-									}
-									tone={
-										pendingFiles ===
-										null
-											? "text-slate-500"
-											: pendingFiles >
-												  0
-												? "text-red-300"
-												: "text-emerald-200"
-									}
-								/>
-							</div>
-						</Panel>
+								</div>
+							</Panel>
+						</section>
 
-						<Panel
-							title="Crew Channel"
-							icon={
-								<Users
-									size={
-										14
-									}
-								/>
-							}
-						>
-							<p className="text-[11px] leading-4 text-slate-400">
-								Mars Command
-								does not publish
-								a personnel
-								roster. Only
-								aggregate counts
-								are transmitted.
-							</p>
-						</Panel>
+						{/* Right rail */}
+						<aside className="col-span-3 flex min-h-0 flex-col gap-3">
+							<Panel
+								title="Client Telemetry"
+								icon={
+									<Cpu
+										size={
+											14
+										}
+									/>
+								}
+							>
+								<div className="space-y-2">
+									<TelemetryRow
+										label="GAME"
+										value={
+											pack
+												.manifest
+												?.minecraftVersion ??
+											MARS_SERVER.minecraftVersion
+										}
+									/>
+									<TelemetryRow
+										label="LOADER"
+										value={`${MARS_SERVER.loader.toUpperCase()}${
+											pack
+												.manifest
+												?.loaderVersion
+												? ` ${pack.manifest.loaderVersion}`
+												: ""
+										}`}
+									/>
+									<TelemetryRow
+										label="SERVER BUILD"
+										value={
+											status?.versionName ??
+											EM_DASH
+										}
+									/>
+									<TelemetryRow
+										label="LAST CONTACT"
+										value={formatClock(
+											lastSuccessfulCheck,
+										)}
+									/>
+									<TelemetryRow
+										label="FILES"
+										value={
+											pendingFiles ===
+											null
+												? EM_DASH
+												: `${pendingFiles} PENDING`
+										}
+										tone={
+											pendingFiles ===
+											null
+												? "text-slate-500"
+												: pendingFiles >
+													  0
+													? "text-red-300"
+													: "text-emerald-200"
+										}
+									/>
+								</div>
+							</Panel>
 
+							<Panel
+								title="Crew Channel"
+								icon={
+									<Users
+										size={
+											14
+										}
+									/>
+								}
+							>
+								<p className="text-[11px] leading-4 text-slate-400">
+									Mars
+									Command
+									does not
+									publish
+									a
+									personnel
+									roster.
+									Only
+									aggregate
+									counts
+									are
+									transmitted.
+								</p>
+							</Panel>
 
-
-						<div className="flex-1" />
-					</aside>
+							<div className="flex-1" />
+						</aside>
 					</div>
 				)}
 

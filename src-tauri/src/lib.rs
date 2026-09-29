@@ -5,6 +5,8 @@ mod settings;
 mod sync;
 
 use std::path::PathBuf;
+#[cfg(windows)]
+use std::process::Command;
 use std::sync::Mutex;
 
 use integrity::IntegrityReport;
@@ -65,10 +67,29 @@ fn auto_detect_instance_root(app: AppHandle) -> Result<Option<String>, String> {
         }
     }
 
+    if let Some(root) = settings::detect_mars_launcher_instance() {
+        let root = root.to_string_lossy().to_string();
+        current.instance_root = Some(root.clone());
+        settings::save(&app, &current)?;
+        return Ok(Some(root));
+    }
+
     let Some(root) = settings::detect_curseforge_mars_instance() else {
         return Ok(None);
     };
     let root = root.to_string_lossy().to_string();
+    current.instance_root = Some(root.clone());
+    settings::save(&app, &current)?;
+    Ok(Some(root))
+}
+
+#[tauri::command]
+fn select_curseforge_instance(app: AppHandle) -> Result<Option<String>, String> {
+    let Some(root) = settings::detect_curseforge_mars_instance() else {
+        return Ok(None);
+    };
+    let root = root.to_string_lossy().to_string();
+    let mut current = settings::load(&app);
     current.instance_root = Some(root.clone());
     settings::save(&app, &current)?;
     Ok(Some(root))
@@ -157,6 +178,195 @@ async fn sync_instance(
     Ok(sync::sync_pack(PathBuf::from(root), manifest).await)
 }
 
+fn require_launch_ready(report: &IntegrityReport) -> Result<(), String> {
+    if let Some(error) = &report.error {
+        return Err(format!("Integrity scan failed: {error}"));
+    }
+    if report.missing_count + report.corrupt_count + report.unreadable_count > 0 {
+        return Err("Pack files are missing, corrupt, or unreadable. Sync and scan again.".into());
+    }
+    if report.manual_unresolved > 0 {
+        return Err("Resolve all manual assets before opening the launcher.".into());
+    }
+    if !report.mods_fully_verified || report.mods_present != report.mods_expected {
+        return Err("Every required mod must be identified and checksum-verified.".into());
+    }
+    if report.mods_foreign > 0 {
+        return Err("Unlisted mod JARs are present. Remove them before continuing.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn setup_minecraft_installation(
+    app: AppHandle,
+    state: State<'_, ManifestState>,
+) -> Result<serde_json::Value, String> {
+    let manifest = state
+        .0
+        .lock()
+        .map_err(|_| "Manifest state is unavailable".to_string())?
+        .clone()
+        .ok_or_else(|| "No trusted manifest is loaded".to_string())?;
+    if !manifest.loader.eq_ignore_ascii_case("neoforge") {
+        return Err(format!(
+            "Automatic installation setup does not support loader {} yet",
+            manifest.loader
+        ));
+    }
+
+    let root = settings::setup_minecraft_installation(
+        &manifest.pack_version,
+        &manifest.minecraft_version,
+        &manifest.loader,
+        &manifest.loader_version,
+    )?;
+    let mut preferences = settings::load(&app);
+    preferences.instance_root = Some(root.to_string_lossy().to_string());
+    settings::save(&app, &preferences)?;
+
+    let sync_result = sync::sync_pack(root.clone(), manifest.clone()).await;
+    let root_text = root.to_string_lossy().to_string();
+    if !sync_result.complete {
+        let message = sync_result
+            .error
+            .clone()
+            .or_else(|| sync_result.issues.first().map(|issue| issue.reason.clone()))
+            .unwrap_or_else(|| "Pack sync did not complete".into());
+        return Ok(serde_json::json!({
+            "instanceRoot": root_text,
+            "syncResult": sync_result,
+            "launcherOpened": false,
+            "message": message,
+        }));
+    }
+
+    let report = tauri::async_runtime::spawn_blocking(move || integrity::scan(&root, &manifest))
+        .await
+        .map_err(|err| format!("Integrity scan failed: {err}"))?;
+    if let Err(message) = require_launch_ready(&report) {
+        return Ok(serde_json::json!({
+            "instanceRoot": root_text,
+            "syncResult": sync_result,
+            "launcherOpened": false,
+            "message": message,
+        }));
+    }
+
+    match open_minecraft_launcher() {
+        Ok(()) => Ok(serde_json::json!({
+            "instanceRoot": root_text,
+            "syncResult": sync_result,
+            "launcherOpened": true,
+            "message": null,
+        })),
+        Err(message) => Ok(serde_json::json!({
+            "instanceRoot": root_text,
+            "syncResult": sync_result,
+            "launcherOpened": false,
+            "message": message,
+        })),
+    }
+}
+
+#[tauri::command]
+async fn get_mars_installation_action(
+    app: AppHandle,
+    state: State<'_, ManifestState>,
+) -> Result<String, String> {
+    let Some(manifest) = state
+        .0
+        .lock()
+        .map_err(|_| "Manifest state is unavailable".to_string())?
+        .clone()
+    else {
+        return Ok("setup".into());
+    };
+    let saved_root = settings::load(&app).instance_root.map(PathBuf::from);
+    let root = saved_root
+        .filter(|root| settings::mars_launcher_profile_version(root).is_some())
+        .or_else(settings::detect_mars_launcher_instance);
+    let Some(root) = root else {
+        return Ok("setup".into());
+    };
+    if settings::load(&app).instance_root.as_deref() != Some(root.to_string_lossy().as_ref()) {
+        let mut preferences = settings::load(&app);
+        preferences.instance_root = Some(root.to_string_lossy().to_string());
+        settings::save(&app, &preferences)?;
+    }
+    let expected_loader_version = format!("{}-{}", manifest.loader, manifest.loader_version);
+    if settings::mars_launcher_profile_version(&root).as_deref()
+        != Some(expected_loader_version.as_str())
+    {
+        return Ok("update".into());
+    }
+    if !sync::manifest_matches_installed_state(&root, &manifest) {
+        return Ok("update".into());
+    }
+
+    let scan_root = root.clone();
+    let scan_manifest = manifest.clone();
+    let report =
+        tauri::async_runtime::spawn_blocking(move || integrity::scan(&scan_root, &scan_manifest))
+            .await
+            .map_err(|err| format!("Integrity scan failed: {err}"))?;
+    if report.missing_count + report.corrupt_count + report.unreadable_count > 0 {
+        return Ok("update".into());
+    }
+    Ok(if require_launch_ready(&report).is_ok() {
+        "launch"
+    } else {
+        "blocked"
+    }
+    .into())
+}
+
+#[tauri::command]
+async fn launch_minecraft_installation(
+    app: AppHandle,
+    state: State<'_, ManifestState>,
+) -> Result<(), String> {
+    let manifest = state
+        .0
+        .lock()
+        .map_err(|_| "Manifest state is unavailable".to_string())?
+        .clone()
+        .ok_or_else(|| "No trusted manifest is loaded".to_string())?;
+    let root = settings::load(&app)
+        .instance_root
+        .map(PathBuf::from)
+        .ok_or_else(|| "Set up the Mars installation before launching".to_string())?;
+    let expected_loader_version = format!("{}-{}", manifest.loader, manifest.loader_version);
+    if settings::mars_launcher_profile_version(&root).as_deref()
+        != Some(expected_loader_version.as_str())
+    {
+        return Err("The Mars Launcher installation is missing. Set it up first.".into());
+    }
+    if !sync::manifest_matches_installed_state(&root, &manifest) {
+        return Err("The server manifest changed. Update the Mars installation first.".into());
+    }
+
+    let report = tauri::async_runtime::spawn_blocking(move || integrity::scan(&root, &manifest))
+        .await
+        .map_err(|err| format!("Integrity scan failed: {err}"))?;
+    require_launch_ready(&report)?;
+    open_minecraft_launcher()
+}
+
+#[cfg(windows)]
+fn open_minecraft_launcher() -> Result<(), String> {
+    Command::new("explorer.exe")
+        .args(["shell:AppsFolder\\Microsoft.4297127D64EC6_8wekyb3d8bbwe!Minecraft"])
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("Could not open Minecraft Launcher: {err}"))
+}
+
+#[cfg(not(windows))]
+fn open_minecraft_launcher() -> Result<(), String> {
+    Err("Opening the installed Minecraft Launcher is only supported on Windows.".into())
+}
+
 /// Best-effort native backdrop. Silently no-ops where the effect is
 /// unsupported so the CSS acrylic fallback stays intact.
 #[cfg(target_os = "windows")]
@@ -194,11 +404,55 @@ pub fn run() {
             refresh_manifest,
             get_client_settings,
             auto_detect_instance_root,
+            select_curseforge_instance,
             choose_instance_root,
             clear_instance_root,
             scan_instance,
-            sync_instance
+            sync_instance,
+            setup_minecraft_installation,
+            get_mars_installation_action,
+            launch_minecraft_installation
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::{require_launch_ready, IntegrityReport};
+
+    fn clean_report() -> IntegrityReport {
+        IntegrityReport {
+            root: "instance".into(),
+            checked_at: "2026-01-01T00:00:00Z".into(),
+            pack_version: "1.2.3".into(),
+            total_files: 1,
+            ok_count: 1,
+            missing_count: 0,
+            corrupt_count: 0,
+            modified_count: 0,
+            foreign_count: 0,
+            unreadable_count: 0,
+            manual_unresolved: 0,
+            mods_expected: 1,
+            mods_present: 1,
+            mods_foreign: 0,
+            mods_fully_verified: true,
+            drift: Vec::new(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn handoff_requires_a_clean_verified_mod_set() {
+        assert!(require_launch_ready(&clean_report()).is_ok());
+
+        let mut report = clean_report();
+        report.mods_present = 0;
+        assert!(require_launch_ready(&report).is_err());
+
+        let mut report = clean_report();
+        report.mods_foreign = 1;
+        assert!(require_launch_ready(&report).is_err());
+    }
 }

@@ -241,6 +241,57 @@ fn read_state(path: &Path) -> InstalledState {
         .unwrap_or_default()
 }
 
+pub fn manifest_matches_installed_state(root: &Path, manifest: &Manifest) -> bool {
+    let path = root.join(STATE_DIR).join(STATE_FILE);
+    let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return false;
+    }
+
+    let previous = read_state(&path);
+    let Ok(canonical_root) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    if previous.instance_root != canonical_root.to_string_lossy()
+        || previous.pack_version != manifest.pack_version
+    {
+        return false;
+    }
+
+    let Ok(desired) = desired_files(manifest) else {
+        return false;
+    };
+    let mut desired_paths = HashSet::with_capacity(desired.len());
+    for file in &desired {
+        let Some(relative) = file.path.as_deref() else {
+            if file.required && !file.manual {
+                return false;
+            }
+            continue;
+        };
+        desired_paths.insert(relative.to_string());
+        if !file.required || file.manual {
+            continue;
+        }
+        let Some(applied) = previous.files.get(relative) else {
+            return false;
+        };
+        if !file.mutable
+            && (applied.hash_algorithm != file.hash_algorithm
+                || !applied.hash.eq_ignore_ascii_case(&file.hash))
+        {
+            return false;
+        }
+    }
+
+    !previous
+        .files
+        .keys()
+        .any(|path| is_under_root(path, &previous.managed_roots) && !desired_paths.contains(path))
+}
+
 fn write_state(path: &Path, state: &InstalledState) -> Result<(), String> {
     let body = serde_json::to_vec_pretty(state)
         .map_err(|err| format!("Could not serialise installed state: {err}"))?;
@@ -686,6 +737,32 @@ mod tests {
         assert!(result.complete, "{result:?}");
         assert_eq!(result.unchanged_count, 1);
         assert_eq!(result.conflict_count, 0);
+    }
+
+    #[test]
+    fn installed_state_detects_manifest_hash_and_version_changes() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("config")).unwrap();
+        std::fs::write(root.path().join("config/mars.toml"), b"approved").unwrap();
+        let manifest = config_manifest("1.0.0", b"approved");
+
+        let result = sync_blocking(root.path(), &manifest);
+        assert!(result.complete, "{result:?}");
+        assert!(manifest_matches_installed_state(root.path(), &manifest));
+        assert!(manifest_matches_installed_state(
+            root.path(),
+            &config_manifest("1.0.0", b"local config edit")
+        ));
+        let mut changed_asset = config_manifest("1.0.0", b"changed");
+        changed_asset.files[0].mutable = false;
+        assert!(!manifest_matches_installed_state(
+            root.path(),
+            &changed_asset
+        ));
+        assert!(!manifest_matches_installed_state(
+            root.path(),
+            &config_manifest("1.1.0", b"approved")
+        ));
     }
 
     #[test]

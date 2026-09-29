@@ -1,14 +1,14 @@
 import {
 	Boxes,
-	Gamepad2,
+	Download,
 	Lock,
+	LoaderCircle,
 	ShieldCheck,
 	ShieldX,
 	TriangleAlert,
 } from "lucide-react";
 import { Panel } from "./Panel";
 import { EM_DASH, formatBytes, formatClock, formatNumber } from "../lib/format";
-import { evaluateLaunch } from "../lib/launch";
 import type { PackIntegrityState } from "../hooks/usePackIntegrity";
 import type { FileVerdict, IntegrityReport } from "../types/manifest";
 
@@ -36,12 +36,13 @@ function severityOf(report: IntegrityReport | null): "clean" | "warn" | "bad" {
 		report.missingCount +
 			report.corruptCount +
 			report.unreadableCount >
-		0 ||
+			0 ||
 		report.modsPresent !== report.modsExpected
 	) {
 		return "bad";
 	}
-	return report.modifiedCount + report.foreignCount + report.modsForeign > 0
+	return report.modifiedCount + report.foreignCount + report.modsForeign >
+		0
 		? "warn"
 		: "clean";
 }
@@ -63,12 +64,28 @@ export function DeploymentPanel({
 	manifest,
 	report,
 	instanceRoot,
+	installationAction,
+	syncing,
+	installationMessage,
+	launcherOpened,
+	setupLauncherInstallation,
 }: PackIntegrityState) {
 	const severity = severityOf(report);
 	const verified =
 		manifest?.available === true && manifest.signatureValid;
+	const canAct =
+		verified &&
+		installationAction !== null &&
+		installationAction !== "blocked";
+	const actionLabel =
+		installationAction === "launch"
+			? "LAUNCH"
+			: installationAction === "update"
+				? "UPDATE"
+				: installationAction === "setup"
+					? "SETUP"
+					: "SETUP LOCKED";
 	const scanned = report !== null && report.error === null;
-	const gate = evaluateLaunch(manifest, report, instanceRoot);
 	const progress =
 		scanned && report.totalFiles > 0
 			? Math.round((report.okCount / report.totalFiles) * 100)
@@ -249,39 +266,62 @@ export function DeploymentPanel({
 
 			<div className="mt-auto pt-3">
 				<p
+					role="status"
 					className={`mb-2 text-center text-[10px] leading-4 ${
-						gate.ready
+						installationMessage &&
+						launcherOpened
 							? "text-emerald-200/80"
-							: "text-amber-200/80"
+							: installationMessage
+								? "text-amber-200/80"
+								: verified
+									? "text-cyan-100/75"
+									: "text-amber-200/80"
 					}`}
 				>
-					{gate.detail} {"->"}
-					{!gate.ready && gate.reason
-						? ` ${gate.reason}`
-						: ""}
+					{installationMessage ??
+						(installationAction === "launch"
+							? "Mars is current and verified. Launch Minecraft Launcher."
+							: installationAction ===
+								  "update"
+								? "The installation or server manifest changed. Update Mars to continue."
+								: installationAction ===
+									  "setup"
+									? "No Mars installation found. Set up an isolated game directory."
+									: verified
+										? "Pack integrity needs attention before launch."
+										: "A trusted signed manifest is required before setup.")}
 				</p>
 				<button
 					type="button"
-					disabled
+					disabled={!canAct || syncing}
+					onClick={setupLauncherInstallation}
 					title={
-						gate.ready
-							? "Pack verified. Launching is not implemented yet."
-							: gate.detail
+						!canAct
+							? "A trusted signed manifest is required."
+							: installationAction ===
+								  "launch"
+								? "Launch the already verified Mars installation."
+								: "Create or update the isolated Mars game directory, verify the files, then open Minecraft Launcher."
 					}
-					className={`flex w-full cursor-not-allowed items-center justify-center gap-2.5 rounded-xl border px-4 py-3.5 text-[13px] font-bold tracking-[0.12em] ${
-						gate.ready
-							? "border-emerald-300/20 bg-emerald-400/10 text-emerald-200/70"
+					className={`flex w-full items-center justify-center gap-2.5 rounded-xl border px-4 py-3.5 text-[13px] font-bold tracking-[0.12em] ${
+						canAct && !syncing
+							? "border-emerald-300/20 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/15"
 							: "border-white/10 bg-white/5 text-slate-500"
 					}`}
 				>
-					{gate.ready ? (
-						<Gamepad2 size={18} />
+					{syncing ? (
+						<LoaderCircle
+							size={18}
+							className="animate-spin"
+						/>
+					) : verified ? (
+						<Download size={18} />
 					) : (
 						<Lock size={16} />
 					)}
-					{gate.ready
-						? "LAUNCH SYSTEMS // NOT YET CONFIGURED"
-						: `LAUNCH LOCKED`}
+					{syncing
+						? "SETTING UP MARS..."
+						: actionLabel}
 				</button>
 			</div>
 		</Panel>

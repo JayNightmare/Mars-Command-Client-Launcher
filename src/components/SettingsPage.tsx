@@ -33,26 +33,29 @@ export function SettingsPage({
 							Client Settings
 						</h1>
 						<p className="mt-0.5 text-[11px] text-slate-500">
-							Instance location and
-							client actions
+							Installation location
+							and client actions
 						</p>
 					</div>
 				</header>
 
 				<div className="grid gap-4 md:grid-cols-2">
 					<Panel
-						title="Minecraft Game Folder"
+						title="Minecraft Installation"
 						icon={<FolderOpen size={14} />}
 					>
 						<div className="space-y-3">
 							<p className="text-[11px] leading-4 text-slate-400">
-								CurseForge's default Instances folder is checked on startup. If Mars Client is not found, choose the game folder that directly contains mods and config.
+								Setup creates a
+								Mars-only game
+								directory under
+								.minecraft/mars-client
 							</p>
-
 							<div className="rounded-lg border border-white/8 bg-black/15 px-3 py-2.5">
 								<p className="mb-1 text-[9px] tracking-[0.12em] text-slate-500 uppercase">
 									Current
-									location
+									game
+									directory
 								</p>
 								<p
 									className="truncate font-mono text-[11px] text-slate-200"
@@ -62,10 +65,9 @@ export function SettingsPage({
 									}
 								>
 									{pack.instanceRoot ??
-										"No Minecraft game folder selected"}
+										"Not set up"}
 								</p>
 							</div>
-
 							<div className="flex flex-wrap items-center gap-2">
 								<button
 									type="button"
@@ -79,9 +81,9 @@ export function SettingsPage({
 											13
 										}
 									/>
-									{pack.instanceRoot
-										? "Change game folder"
-										: "Choose game folder"}
+									Choose
+									existing
+									folder
 								</button>
 								{pack.instanceRoot ? (
 									<button
@@ -126,17 +128,29 @@ export function SettingsPage({
 									className={`text-emerald-300 ${refreshingTelemetry ? "animate-spin" : ""}`}
 								/>
 							</button>
-
 							<button
 								type="button"
-								onClick={pack.syncPack}
-								disabled={pack.busy || pack.syncing}
+								onClick={
+									pack.syncPack
+								}
+								disabled={
+									pack.busy ||
+									pack.syncing
+								}
 								className="flex w-full items-center justify-between gap-3 rounded-lg border border-white/8 bg-white/5 px-3 py-2.5 text-left text-[11px] text-slate-200 transition hover:bg-white/10 disabled:cursor-wait disabled:text-slate-400"
 							>
-								<span>Sync / update pack</span>
-								<RefreshCw size={14} className={`text-cyan-200 ${pack.syncing ? "animate-spin" : ""}`} />
+								<span>
+									Sync /
+									update
+									pack
+								</span>
+								<RefreshCw
+									size={
+										14
+									}
+									className={`text-cyan-200 ${pack.syncing ? "animate-spin" : ""}`}
+								/>
 							</button>
-
 							<button
 								type="button"
 								disabled
@@ -203,28 +217,137 @@ export function SettingsPage({
 					</div>
 				</Panel>
 
+				{pack.installationMessage ? (
+					<p
+						role="status"
+						className={
+							pack.launcherOpened
+								? "text-[11px] text-emerald-200"
+								: "text-[11px] text-amber-200"
+						}
+					>
+						{pack.installationMessage}
+					</p>
+				) : null}
+
 				{pack.syncResult ? (
-					<Panel title="Sync Result" icon={<ShieldCheck size={14} />}>
-						<p className={`text-[11px] leading-4 ${pack.syncResult.complete ? "text-emerald-200" : "text-amber-200"}`}>
-							{pack.syncResult.error ?? (pack.syncResult.complete
-								? `Pack ${pack.syncResult.packVersion} is up to date.`
-								: "Sync stopped with files needing attention.")}
+					<Panel
+						title="Sync Result"
+						icon={<ShieldCheck size={14} />}
+					>
+						<p
+							className={`text-[11px] leading-4 ${pack.syncResult.complete ? "text-emerald-200" : "text-amber-200"}`}
+						>
+							{pack.syncResult
+								.error ??
+								(pack.syncResult
+									.complete
+									? `Pack ${pack.syncResult.packVersion} is up to date.`
+									: "Sync stopped with files needing attention.")}
 						</p>
 						<div className="mt-3 grid grid-cols-2 gap-3 text-[10px] sm:grid-cols-5">
-							<div><span className="text-slate-500">Installed</span><p className="mt-0.5 font-mono text-slate-200">{pack.syncResult.installedCount}</p></div>
-							<div><span className="text-slate-500">Updated</span><p className="mt-0.5 font-mono text-slate-200">{pack.syncResult.updatedCount}</p></div>
-							<div><span className="text-slate-500">Unchanged</span><p className="mt-0.5 font-mono text-slate-200">{pack.syncResult.unchangedCount}</p></div>
-							<div><span className="text-slate-500">Conflicts</span><p className="mt-0.5 font-mono text-amber-200">{pack.syncResult.conflictCount}</p></div>
-							<div><span className="text-slate-500">Manual / failed</span><p className="mt-0.5 font-mono text-slate-200">{pack.syncResult.manualCount} / {pack.syncResult.failedCount}</p></div>
+							<div>
+								<span className="text-slate-500">
+									Installed
+								</span>
+								<p className="mt-0.5 font-mono text-slate-200">
+									{
+										pack
+											.syncResult
+											.installedCount
+									}
+								</p>
+							</div>
+							<div>
+								<span className="text-slate-500">
+									Updated
+								</span>
+								<p className="mt-0.5 font-mono text-slate-200">
+									{
+										pack
+											.syncResult
+											.updatedCount
+									}
+								</p>
+							</div>
+							<div>
+								<span className="text-slate-500">
+									Unchanged
+								</span>
+								<p className="mt-0.5 font-mono text-slate-200">
+									{
+										pack
+											.syncResult
+											.unchangedCount
+									}
+								</p>
+							</div>
+							<div>
+								<span className="text-slate-500">
+									Conflicts
+								</span>
+								<p className="mt-0.5 font-mono text-amber-200">
+									{
+										pack
+											.syncResult
+											.conflictCount
+									}
+								</p>
+							</div>
+							<div>
+								<span className="text-slate-500">
+									Manual /
+									failed
+								</span>
+								<p className="mt-0.5 font-mono text-slate-200">
+									{
+										pack
+											.syncResult
+											.manualCount
+									}{" "}
+									/{" "}
+									{
+										pack
+											.syncResult
+											.failedCount
+									}
+								</p>
+							</div>
 						</div>
-						{pack.syncResult.issues.length > 0 ? (
+						{pack.syncResult.issues.length >
+						0 ? (
 							<ul className="mt-3 max-h-28 space-y-1 overflow-y-auto text-[10px]">
-								{pack.syncResult.issues.slice(0, 12).map((issue) => (
-									<li className="flex items-start gap-2" key={`${issue.path}-${issue.reason}`}>
-										<span className="truncate font-mono text-slate-400" title={issue.path}>{issue.path}</span>
-										<span className="text-slate-500">{issue.reason}</span>
-									</li>
-								))}
+								{pack.syncResult.issues
+									.slice(
+										0,
+										12,
+									)
+									.map(
+										(
+											issue,
+										) => (
+											<li
+												className="flex items-start gap-2"
+												key={`${issue.path}-${issue.reason}`}
+											>
+												<span
+													className="truncate font-mono text-slate-400"
+													title={
+														issue.path
+													}
+												>
+													{
+														issue.path
+													}
+												</span>
+												<span className="text-slate-500">
+													{
+														issue.reason
+													}
+												</span>
+											</li>
+										),
+									)}
 							</ul>
 						) : null}
 					</Panel>
