@@ -41,7 +41,7 @@ Compares a local instance against the verified manifest and reports drift:
 | `foreign`    | Unlisted file inside a managed directory |
 | `unreadable` | Could not be read                        |
 
-The exported `modlist.html` is the project catalog: the maintainer tool parses each CurseForge link, searches the CurseForge API by its slug, and verifies the resolved project IDs exactly match the pinned `projectID`/`fileID` pairs in the CurseForge export. It then resolves the pinned files, not an unreviewed “latest” file. This uses the public project links as the lookup source without requiring a share code from players.
+The official CurseForge export's `manifest.json` is authoritative: its `projectID`/`fileID` pairs pin the exact selected projects and files. The maintainer tool resolves those IDs directly through the CurseForge API and uses project metadata to determine installation categories; `modlist.html` is not required or used as an install source.
 
 CurseForge files are checked by exact filename, destination, file size, and the SHA-1 checksum published by CurseForge. Mods, texture packs, and shaders install to their respective instance folders. The scanner also reports unlisted `.jar` files; matching jar counts alone are not considered sufficient. Data packs are world-specific, so they are listed as manual assets until a world target is selected.
 
@@ -138,7 +138,7 @@ The client reads `releases/latest/download`, so **publishing a release is what s
 
 ### Automated
 
-Run the **Publish pack manifest** workflow (`workflow_dispatch`) with a pack version. It parses `modlist.html`, looks up every slug through the CurseForge API, cross-checks projects against the exported file pins, records category destinations, exact filenames, sizes, SHA-1 checksums and distribution permissions, hashes the override files, signs the manifest, verifies it, and publishes the release. Override download URLs are pinned to the source commit. Re-running a version publishes a unique manifest release tag, so a metadata refresh does not require a pack-version bump.
+Run the **Publish pack manifest** workflow (`workflow_dispatch`) with a pack version. It resolves the projects and exact files pinned in the official export's `manifest.json`, records category destinations, filenames, sizes, SHA-1 checksums and distribution permissions, hashes the override files, signs the manifest, verifies it, and publishes the release. Override download URLs are pinned to the source commit. Re-running a version publishes a unique manifest release tag, so a metadata refresh does not require a pack-version bump.
 
 Requires repository secrets **`CURSEFORGE_API_KEY`** (an approved key for the launcher/third-party API use) and **`MARS_SIGNING_KEY`** (the hex contents of the signing private key). Store the API key in the local `.env` for maintainer CLI runs; never commit `.env` or put the API key in client build settings.
 
@@ -196,7 +196,7 @@ manifest_tool build <instance-root> <version> <manifest-out>    # hash a working
     }
   ],
 
-  // File details resolved from modlist.html links and export pins at publish time.
+  // File details resolved from the official export's pinned IDs at publish time.
   "curseforgeMods": [
     {
       "projectId": 401648,

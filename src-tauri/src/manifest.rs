@@ -8,12 +8,10 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 /// Base location of `manifest.json` and `manifest.json.sig`.
-/// `releases/latest/download` always resolves to the newest published release,
-/// so publishing a release is what ships a pack update.
 /// Override at build time with `MARS_MANIFEST_BASE_URL`.
 pub const MANIFEST_BASE_URL: &str = match option_env!("MARS_MANIFEST_BASE_URL") {
     Some(url) => url,
-    None => "https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases/latest/download",
+    None => "https://api.nexusgit.info/api/v1",
 };
 
 /// Hex-encoded Ed25519 public key (32 bytes). Override at build time with
@@ -159,6 +157,26 @@ impl ManifestStatus {
     }
 
     fn from_manifest(manifest: &Manifest) -> Self {
+        let mods_dir = manifest.mods_dir.as_deref().unwrap_or("mods");
+        let hash_listed_mod_count = manifest
+            .files
+            .iter()
+            .filter(|file| {
+                file.path
+                    .strip_prefix(&format!("{mods_dir}/"))
+                    .is_some_and(|name| {
+                        !name.contains('/') && name.to_ascii_lowercase().ends_with(".jar")
+                    })
+            })
+            .count();
+        let curseforge_mod_count = manifest
+            .curseforge_mods
+            .iter()
+            .filter(|file| match file.install_dir.as_deref() {
+                Some(dir) => dir == mods_dir,
+                None => !file.manual_download,
+            })
+            .count();
         Self {
             available: true,
             signature_valid: true,
@@ -188,17 +206,7 @@ impl ManifestStatus {
                         .count(),
             )
             .ok(),
-            mod_count: u32::try_from(
-                manifest
-                    .curseforge_mods
-                    .iter()
-                    .filter(|file| match file.install_dir.as_deref() {
-                        Some(dir) => dir == "mods",
-                        None => !file.manual_download,
-                    })
-                    .count(),
-            )
-            .ok(),
+            mod_count: u32::try_from(hash_listed_mod_count + curseforge_mod_count).ok(),
             generated_at: Some(manifest.generated_at.clone()),
             fetched_at: crate::now_rfc3339(),
             error: None,
@@ -404,7 +412,7 @@ pub async fn fetch_verified() -> Result<(Manifest, ManifestStatus), ManifestStat
 
 #[cfg(test)]
 mod tests {
-    use super::is_safe_relative_path;
+    use super::{is_safe_relative_path, FileSide, Manifest, ManifestFile, ManifestStatus};
 
     #[test]
     fn rejects_traversal_and_absolute_paths() {
@@ -415,5 +423,34 @@ mod tests {
         assert!(!is_safe_relative_path("C:/Windows/System32"));
         assert!(!is_safe_relative_path("mods\\example.jar"));
         assert!(!is_safe_relative_path(""));
+    }
+
+    #[test]
+    fn counts_hash_listed_jar_files_as_mods() {
+        let manifest = Manifest {
+            schema_version: 1,
+            pack_version: "1.2.3".into(),
+            minecraft_version: "1.21.1".into(),
+            loader: "neoforge".into(),
+            loader_version: "21.1.250".into(),
+            generated_at: "2026-01-01T00:00:00Z".into(),
+            managed_dirs: vec!["mods".into(), "config".into()],
+            files: vec![ManifestFile {
+                path: "mods/create.jar".into(),
+                sha256: "a".repeat(64),
+                size: 1,
+                required: true,
+                mutable: false,
+                side: FileSide::Client,
+                download_url: Some("https://example.invalid/create.jar".into()),
+                manual_download: false,
+                source_page: None,
+            }],
+            curseforge_mods: Vec::new(),
+            mods_dir: Some("mods".into()),
+        };
+
+        let status = ManifestStatus::from_manifest(&manifest);
+        assert_eq!(status.mod_count, Some(1));
     }
 }

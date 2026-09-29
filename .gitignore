@@ -181,3 +181,4 @@ manifest-*
 # Generated manifest artifacts
 manifest-dist/
 manifest-test-instance/
+Mars-Server*

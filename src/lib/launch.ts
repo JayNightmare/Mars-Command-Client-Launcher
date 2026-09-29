@@ -9,8 +9,8 @@ export type LaunchGate = {
 
 /**
  * The launch control stays locked until the local install provably matches the
- * signed manifest. Mods are pinned by CurseForge id and carry no hash, so they
- * are gated on count rather than content.
+ * signed manifest. Directly listed mod files are content-hashed; legacy
+ * CurseForge pins require resolved filenames and checksums before launch.
  */
 export function evaluateLaunch(
 	manifest: ManifestStatus | null,
@@ -37,12 +37,16 @@ export function evaluateLaunch(
 		return {
 			ready: false,
 			reason: "NOT VERIFIED",
-			detail: report?.error ?? "Run a pack integrity check before launching.",
+			detail:
+				report?.error ??
+				"Run a pack integrity check before launching.",
 		};
 	}
 
 	const broken =
-		report.missingCount + report.corruptCount + report.unreadableCount;
+		report.missingCount +
+		report.corruptCount +
+		report.unreadableCount;
 	if (broken > 0) {
 		return {
 			ready: false,
@@ -63,7 +67,7 @@ export function evaluateLaunch(
 		return {
 			ready: false,
 			reason: "MANIFEST NEEDS MOD HASHES",
-			detail: "This release only lists CurseForge IDs. Sync a refreshed signed manifest to verify exact mod files.",
+			detail: "The signed manifest does not resolve every required mod file and checksum. Publish a complete manifest before launching.",
 		};
 	}
 

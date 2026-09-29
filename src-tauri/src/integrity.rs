@@ -52,8 +52,7 @@ pub struct IntegrityReport {
     pub foreign_count: u32,
     pub unreadable_count: u32,
     pub manual_unresolved: u32,
-    /// Mods pinned by CurseForge id. These carry no hash, so only presence is
-    /// compared by count.
+    /// Required mods represented by hash-listed files or CurseForge pins.
     pub mods_expected: u32,
     pub mods_present: u32,
     pub mods_foreign: u32,
@@ -128,6 +127,12 @@ pub fn scan(root: &Path, manifest: &Manifest) -> IntegrityReport {
         );
     }
 
+    let mods_dir = manifest.mods_dir.as_deref().unwrap_or("mods");
+    let hash_manifest_mods = manifest
+        .files
+        .iter()
+        .filter(|file| file.required && manifest_mod_file_name(&file.path, mods_dir).is_some())
+        .count();
     let mut report = IntegrityReport {
         root: root_display,
         checked_at: crate::now_rfc3339(),
@@ -150,10 +155,10 @@ pub fn scan(root: &Path, manifest: &Manifest) -> IntegrityReport {
         foreign_count: 0,
         unreadable_count: 0,
         manual_unresolved: 0,
-        mods_expected: u32::try_from(required_mods(manifest).count()).unwrap_or(u32::MAX),
+        mods_expected: u32::try_from(hash_manifest_mods).unwrap_or(u32::MAX),
         mods_present: 0,
         mods_foreign: 0,
-        mods_fully_verified: false,
+        mods_fully_verified: true,
         drift: Vec::new(),
         error: None,
     };
@@ -181,6 +186,12 @@ pub fn scan(root: &Path, manifest: &Manifest) -> IntegrityReport {
             },
         };
 
+        if entry.required
+            && manifest_mod_file_name(&entry.path, mods_dir).is_some()
+            && verdict == FileVerdict::Ok
+        {
+            report.mods_present += 1;
+        }
         report.record(entry.path.clone(), verdict);
     }
 
@@ -203,6 +214,11 @@ pub fn scan(root: &Path, manifest: &Manifest) -> IntegrityReport {
     }
 
     report
+}
+
+fn manifest_mod_file_name<'a>(path: &'a str, mods_dir: &str) -> Option<&'a str> {
+    let name = path.strip_prefix(&format!("{mods_dir}/"))?;
+    (!name.contains('/') && name.to_ascii_lowercase().ends_with(".jar")).then_some(name)
 }
 
 impl IntegrityReport {
@@ -275,12 +291,19 @@ fn scan_curseforge_assets(
 ) {
     let mods_dir = manifest.mods_dir.as_deref().unwrap_or("mods");
     let mod_files: Vec<_> = required_mods(manifest).collect();
-    report.mods_expected = u32::try_from(mod_files.len()).unwrap_or(u32::MAX);
-    report.mods_fully_verified = mod_files
+    report.mods_expected = report
+        .mods_expected
+        .saturating_add(u32::try_from(mod_files.len()).unwrap_or(u32::MAX));
+    report.mods_fully_verified &= mod_files
         .iter()
         .all(|file| file.file_name.is_some() && file.sha1.is_some());
 
-    let mut expected_mod_names = HashSet::new();
+    let mut expected_mod_names: HashSet<String> = manifest
+        .files
+        .iter()
+        .filter_map(|file| manifest_mod_file_name(&file.path, mods_dir))
+        .map(str::to_ascii_lowercase)
+        .collect();
     for file in &manifest.curseforge_mods {
         let install_dir = match file.install_dir.as_deref() {
             Some(dir) => Some(dir),
@@ -404,8 +427,9 @@ fn collect_foreign(
 #[cfg(test)]
 mod tests {
     use super::scan;
-    use crate::manifest::{CurseForgeMod, Manifest};
+    use crate::manifest::{CurseForgeMod, FileSide, Manifest, ManifestFile};
     use sha1::{Digest, Sha1};
+    use sha2::Sha256;
 
     fn mod_entry(project_id: u32, file_id: u32, name: &str, content: &[u8]) -> CurseForgeMod {
         CurseForgeMod {
@@ -450,6 +474,59 @@ mod tests {
         assert_eq!(report.mods_present, 1);
         assert_eq!(report.mods_foreign, 1);
         assert_eq!(report.missing_count, 1);
+        assert!(report.mods_fully_verified);
+    }
+
+    #[test]
+    fn verifies_hash_listed_mods_and_reports_unlisted_jars_as_foreign() {
+        let root = tempfile::tempdir().unwrap();
+        let mods = root.path().join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        std::fs::write(mods.join("verified.jar"), b"verified bytes").unwrap();
+        std::fs::write(mods.join("corrupt.jar"), b"wrong bytes").unwrap();
+        std::fs::write(mods.join("foreign.jar"), b"unlisted bytes").unwrap();
+
+        let manifest = Manifest {
+            schema_version: 1,
+            pack_version: "1.0.0".into(),
+            minecraft_version: "1.21.1".into(),
+            loader: "neoforge".into(),
+            loader_version: "21.1.250".into(),
+            generated_at: "2026-01-01T00:00:00Z".into(),
+            managed_dirs: vec!["mods".into()],
+            files: vec![
+                ManifestFile {
+                    path: "mods/verified.jar".into(),
+                    sha256: hex::encode(Sha256::digest(b"verified bytes")),
+                    size: b"verified bytes".len() as u64,
+                    required: true,
+                    mutable: false,
+                    side: FileSide::Client,
+                    download_url: Some("https://example.invalid/verified.jar".into()),
+                    manual_download: false,
+                    source_page: None,
+                },
+                ManifestFile {
+                    path: "mods/corrupt.jar".into(),
+                    sha256: hex::encode(Sha256::digest(b"expected bytes")),
+                    size: b"expected bytes".len() as u64,
+                    required: true,
+                    mutable: false,
+                    side: FileSide::Client,
+                    download_url: Some("https://example.invalid/corrupt.jar".into()),
+                    manual_download: false,
+                    source_page: None,
+                },
+            ],
+            curseforge_mods: Vec::new(),
+            mods_dir: Some("mods".into()),
+        };
+
+        let report = scan(root.path(), &manifest);
+        assert_eq!(report.mods_expected, 2);
+        assert_eq!(report.mods_present, 1);
+        assert_eq!(report.mods_foreign, 1);
+        assert_eq!(report.corrupt_count, 1);
         assert!(report.mods_fully_verified);
     }
 
