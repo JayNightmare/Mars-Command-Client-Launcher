@@ -1,271 +1,144 @@
-# Mars Command Client
+# Mars Command
 
-A desktop companion client for the **Mars** modded Minecraft server, built with Tauri v2, React, TypeScript and Tailwind CSS v4.
+Mars Command is a Windows desktop companion for the **Mars** modded Minecraft server. It monitors server status, verifies the signed pack manifest, syncs an isolated game directory, and registers the installation in Minecraft Launcher.
 
-The client provides live server telemetry, signed pack verification, and a **Sync / update pack** action that installs or updates verified mods and overrides. Launching Minecraft is not implemented yet.
-
-|           |                                            |
-| --------- | ------------------------------------------ |
-| Server    | `play.nexusgit.info`                       |
-| Minecraft | 1.21.1                                     |
-| Loader    | NeoForge 21.1.250                          |
-| Voice     | `voice.nexusgit.info` *(not yet wired up)* |
-
----
+| | |
+| --- | --- |
+| Minecraft | 1.21.1 |
+| Loader | NeoForge 21.1.250 |
+| Server | `play.nexusgit.info` |
+| Voice | `voice.nexusgit.info` (not yet integrated) |
 
 ## Features
 
-### Live server telemetry
+### Server status
 
-Polls the Mars server every 15 seconds from the Rust backend using the Minecraft Java server-list protocol, and reports online state, player count, latency, MOTD and server build.
+The Rust backend polls the Minecraft Java status protocol every 15 seconds and reports online state, player count, latency, MOTD, and server build. Polling avoids overlapping checks and pauses while the window is hidden. The Mars proxy requires protocol version `767` for Minecraft 1.21.1; the conventional `-1` sentinel is rejected.
 
-Polling pauses while the window is hidden, never overlaps requests, and resolves every failure into a well-formed offline result — the dashboard stays usable with the server down or the network unplugged.
+### Signed pack verification
 
-> **Note**
-> The proxy in front of Mars rejects the conventional `-1` protocol-version sentinel and closes the connection. The client sends `767` (1.21.1) instead. Changing this back will make the server appear permanently offline.
+The client fetches `manifest.json` and `manifest.json.sig` from the Mars API. It verifies the detached Ed25519 signature against the public key compiled into the application before trusting the manifest. Invalid signatures fail closed.
 
-### Signed pack manifest
+Each managed file, including mod JARs, is verified using its signed SHA-256 and size. Unlisted JARs in managed directories are reported as foreign. Config and default-config files are mutable: local edits are preserved and reported as conflicts. Sync stages downloads, validates them before replacement, and removes obsolete files only when they still match the last installed hash.
 
-The launcher fetches a manifest describing every managed file, verifies an **Ed25519 detached signature** against a public key compiled into the binary, and rejects anything that fails. A manifest that does not verify is discarded rather than partially applied.
+### Isolated Minecraft installation
 
-### Integrity scan
-
-Compares a local instance against the verified manifest and reports drift:
-
-| Verdict      | Meaning                                  |
-| ------------ | ---------------------------------------- |
-| `ok`         | Matches the manifest                     |
-| `missing`    | Required file absent                     |
-| `corrupt`    | Present but wrong contents               |
-| `modified`   | Differs, but declared user-editable      |
-| `foreign`    | Unlisted file inside a managed directory |
-| `unreadable` | Could not be read                        |
-
-The official CurseForge export's `manifest.json` is authoritative: its `projectID`/`fileID` pairs pin the exact selected projects and files. The maintainer tool resolves those IDs directly through the CurseForge API and uses project metadata to determine installation categories; `modlist.html` is not required or used as an install source.
-
-CurseForge files are checked by exact filename, destination, file size, and the SHA-1 checksum published by CurseForge. Mods, texture packs, and shaders install to their respective instance folders. The scanner also reports unlisted `.jar` files; matching jar counts alone are not considered sufficient. Data packs are world-specific, so they are listed as manual assets until a world target is selected.
-
-### Sync and update
-
-Sync downloads only missing or outdated files, stages each file beside its destination, validates its size and checksum, and replaces the destination only after verification. Downloads come directly from the HTTPS URLs in the signed manifest; the CurseForge API key is used only by the release workflow, never by the launcher.
-
-For `mutable` config files, an update is applied only when the local file still matches the version previously installed by Mars Command. Locally edited configs are preserved and reported as conflicts. Removed managed files are deleted only when they still match the last installed checksum. Files that CurseForge does not allow to be distributed must be fetched manually from their source page.
-
-### Launch gating
-
-The launch control stays locked until every condition holds:
+Setup creates a Minecraft Launcher profile named `Mars Client <pack version>` and an isolated game directory:
 
 ```text
-manifest signature valid
-  AND instance folder selected
-  AND scan completed without error
-  AND missing + corrupt + unreadable == 0
-  AND mods present == mods pinned
+%APPDATA%\.minecraft\mars-client\<pack-version>
 ```
 
-The button names the specific blocker, e.g. `LAUNCH LOCKED // MOD COUNT MISMATCH`.
+The shared `%APPDATA%\.minecraft\mods` folder is left untouched. Setup uses the matching NeoForge version already installed in Minecraft Launcher, preserves other profiles and account data, syncs the signed pack, verifies it, and opens the official launcher. Close Minecraft Launcher before Setup or Update so its profile file is not being edited concurrently.
 
----
+The dashboard remembers the installation and offers:
+
+| Action | When it appears |
+| --- | --- |
+| `SETUP` | No Mars installation is registered. |
+| `UPDATE` | The signed pack version, immutable file hashes, or NeoForge version changed. |
+| `LAUNCH` | The installation matches the current signed manifest and passes integrity checks. |
+| `BLOCKED` | Required files or mods need attention, or there is no trusted manifest. |
+
+Launch rechecks integrity but does not rewrite the profile or sync again. Minecraft Launcher handles Microsoft sign-in; select the Mars profile and click **Play** there. Mars Command does not directly start the game process.
+
+World-specific data packs are not placed into a save automatically; they remain manual until a world target is selected.
+
+## Release API
+
+The client defaults to `https://api.nexusgit.info/api/v1`. The release feed exposes the signed manifest, detached signature, and files referenced by that manifest:
+
+- `GET /api/v1/manifest.json`
+- `GET /api/v1/manifest.json.sig`
+- `GET /api/v1/files/<manifest-relative-path>`
+
+The API serves release artifacts but does not need the Ed25519 private key. Deploy `manifest.json`, `manifest.json.sig`, and every referenced file while preserving relative paths. Only host files you are authorized to redistribute. The client never embeds or sends the development API JWT.
 
 ## Development
 
-```bash
+Prerequisites: Node.js, Rust, and the [Tauri v2 prerequisites](https://tauri.app/start/prerequisites/).
+
+```powershell
 npm install
-npm run tauri dev     # run the app
-npm run build         # tsc + vite build
+npm run tauri dev
 ```
 
-```bash
+Run checks:
+
+```powershell
+npm run build
 cd src-tauri
-cargo check           # compile the backend
-cargo test --lib      # unit tests (path-traversal safety)
+cargo fmt --check
+cargo test --all-targets
 ```
 
-Requires a Rust toolchain and the [Tauri v2 prerequisites](https://tauri.app/start/prerequisites/).
+Build Windows installers from the repository root:
 
-### Project layout
+```powershell
+$env:MARS_MANIFEST_BASE_URL = "https://api.nexusgit.info/api/v1"
+$env:MARS_MANIFEST_PUBLIC_KEY = "<production public key in hex>"
+npm run tauri -- build
+```
+
+`MARS_MANIFEST_BASE_URL` and `MARS_MANIFEST_PUBLIC_KEY` are compile-time overrides. Rust `option_env!` does not automatically read `.env`. Bundles are written under `src-tauri\target\release\bundle\` (NSIS and MSI where available).
+
+Before public distribution, set a product name/version in `src-tauri/tauri.conf.json`, use a production keypair whose public key is embedded in the client, and code-sign the Windows installer if you want to reduce SmartScreen warnings. Never ship the private signing key or an API JWT in the app.
+
+## Generate A Manifest
+
+The maintainer tool hashes these directories from the local pack instance: `mods`, `config`, `kubejs`, `defaultconfigs`, `resourcepacks`, and `shaderpacks`. Only `config` and `defaultconfigs` are marked mutable.
+
+From PowerShell at the repository root:
+
+```powershell
+$env:MARS_SKIP_LOCAL_ENV = "1"
+$env:MARS_PACKAGE_BASE_URL = "https://api.nexusgit.info/api/v1"
+cargo run --manifest-path src-tauri/Cargo.toml --release --example manifest_tool -- build `
+  "modpack/Mars-Client-1.2.4/Mars Client" `
+  "1.2.4" `
+  "manifest-dist/manifest.json"
+
+cargo run --manifest-path src-tauri/Cargo.toml --release --example manifest_tool -- sign `
+  "manifest-keys/mars-signing.key" `
+  "manifest-dist/manifest.json"
+
+cargo run --manifest-path src-tauri/Cargo.toml --release --example manifest_tool -- verify `
+  "manifest-dist/manifest.json"
+```
+
+`MARS_SKIP_LOCAL_ENV=1` prevents the tool from loading `.env`. The signing command reads the private key file without printing its contents. Verify the signature against the same public key embedded in the client, then deploy the manifest, signature, and payload files to the API release directory.
+
+## Security
+
+- The Ed25519 signature authenticates the exact manifest bytes. Re-sign after any edit, including whitespace.
+- The client verifies the signature before parsing the manifest and rejects unsafe relative paths.
+- Downloads require HTTPS and are checked against signed SHA-256 hashes and sizes before installation.
+- Keep the private signing key in protected release storage, never in source control or on the API server.
+- Hashes detect file changes; the signature proves the trusted maintainer approved those hashes.
+
+## Project Layout
 
 ```text
-src/
-  components/      Panel, TitleBar, ServerStatusPanel, DeploymentPanel
-  hooks/           useMarsServerStatus, usePackIntegrity
-  lib/             mars (config), format, launch (gating rules)
-  types/           mars, manifest
+src/                         React dashboard, settings, hooks, and UI types
 src-tauri/src/
-  minecraft.rs     SRV resolution + Java status protocol
-  manifest.rs      Schema, fetch, Ed25519 verification
-  integrity.rs     Local scan and drift report
-  settings.rs      Persisted client settings
-  sync.rs          Staged downloads, checksum verification, conflict handling
-  lib.rs           Tauri commands and managed state
+  minecraft.rs               DNS/SRV resolution and Java status protocol
+  manifest.rs                Manifest schema, fetch, signature verification
+  integrity.rs               Hash-based file and mod verification
+  settings.rs                Persistent game path and Launcher profile setup
+  sync.rs                    Staged sync and installed-state tracking
+  lib.rs                     Tauri commands and Setup/Update/Launch status
 src-tauri/examples/
-  manifest_tool.rs Maintainer CLI (not shipped in the app)
+  manifest_tool.rs           Maintainer manifest generator and signer
+Mars-Server-API/
+  main.py                    Manifest and package-file API
+  openapi.json               API contract
+manifest-dist/               Release manifest and detached signature
 ```
 
-### Tauri commands
+## Limitations
 
-| Command                            | Returns                 |
-| ---------------------------------- | ----------------------- |
-| `get_minecraft_status(host, port)` | `MinecraftServerStatus` |
-| `refresh_manifest()`               | `ManifestStatus`        |
-| `scan_instance()`                  | `IntegrityReport`       |
-| `sync_instance()`                  | `SyncResult`            |
-| `get_client_settings()`            | `ClientSettings`        |
-| `choose_instance_root()`           | `string` or `null`      |
-| `clear_instance_root()`            | —                       |
-
-### Build-time configuration
-
-| Variable | Default |
-| -------------------------- | --------------------------------------------------------------------------------------- |
-| `MARS_MANIFEST_BASE_URL` | `https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases/latest/download` |
-| `MARS_MANIFEST_PUBLIC_KEY` | Hex Ed25519 key compiled into `manifest.rs` |
-| `CURSEFORGE_API_KEY` | Maintainer-only API key used by the manifest tool; never shipped in the app |
-| `CURSEFORGE_API_URL` | `https://api.curseforge.com` |
-| `MARS_OVERRIDE_BASE_URL` | HTTPS base URL for the committed CurseForge `overrides/` files |
-
-Useful for testing against a local manifest server:
-
-```bash
-MARS_MANIFEST_BASE_URL=http://127.0.0.1:8799 npm run tauri dev
-```
-
----
-
-## Publishing a pack update
-
-The client reads `releases/latest/download`, so **publishing a release is what ships an update**. Users pick it up on their next sync.
-
-### Automated
-
-Run the **Publish pack manifest** workflow (`workflow_dispatch`) with a pack version. It resolves the projects and exact files pinned in the official export's `manifest.json`, records category destinations, filenames, sizes, SHA-1 checksums and distribution permissions, hashes the override files, signs the manifest, verifies it, and publishes the release. Override download URLs are pinned to the source commit. Re-running a version publishes a unique manifest release tag, so a metadata refresh does not require a pack-version bump.
-
-Requires repository secrets **`CURSEFORGE_API_KEY`** (an approved key for the launcher/third-party API use) and **`MARS_SIGNING_KEY`** (the hex contents of the signing private key). Store the API key in the local `.env` for maintainer CLI runs; never commit `.env` or put the API key in client build settings.
-
-### Manual
-
-```bash
-cd src-tauri
-
-# 1. Convert the CurseForge export (requires CURSEFORGE_API_KEY in the environment or root .env)
-cargo run --example manifest_tool -- cf-pack "../modpack/Mars Client" 1.2.0 ../manifest-dist/manifest.json
-
-# 2. Sign it
-cargo run --example manifest_tool -- sign ../manifest-keys/mars-signing.key ../manifest-dist/manifest.json
-
-# 3. Confirm it verifies against the key in this build
-cargo run --example manifest_tool -- verify ../manifest-dist/manifest.json
-```
-
-Upload `manifest.json` and `manifest.json.sig` as release assets.
-
-Other subcommands:
-
-```bash
-manifest_tool keygen <private-key-out>                          # new Ed25519 keypair
-manifest_tool build <instance-root> <version> <manifest-out>    # hash a working instance
-```
-
----
-
-## Manifest schema
-
-```jsonc
-{
-  "schemaVersion": 1,
-  "packVersion": "1.0.0",
-  "minecraftVersion": "1.21.1",
-  "loader": "neoforge",
-  "loaderVersion": "21.1.250",
-  "generatedAt": "2026-09-27T16:08:16Z",
-
-  // Fully owned by Mars Command; unlisted files here are reported as foreign.
-  "managedDirs": ["config", "kubejs", "defaultconfigs", "mods", "resourcepacks", "shaderpacks"],
-
-  "files": [
-    {
-      "path": "config/example.toml",   // forward slashes, relative, no traversal
-      "sha256": "...",
-      "size": 129,
-      "required": true,
-      "mutable": true,                 // drift reported, never treated as corruption
-      "side": "client",
-      "downloadUrl": "https://...",    // HTTPS only; raw override URL
-      "manualDownload": false,         // upstream forbids automated download
-      "sourcePage": null
-    }
-  ],
-
-  // File details resolved from the official export's pinned IDs at publish time.
-  "curseforgeMods": [
-    {
-      "projectId": 401648,
-      "fileId": 5873258,
-      "required": true,
-      "installDir": "mods",
-      "fileName": "example-mod.jar",
-      "size": 123456,
-      "sha1": "...",
-      "downloadUrl": "https://...",
-      "manualDownload": false,
-      "sourcePage": "https://www.curseforge.com/..."
-    }
-  ],
-  // null means it is world-specific and requires manual placement.
-  // installDir can also be "resourcepacks" or "shaderpacks".
-  "modsDir": "mods"
-}
-```
-
-Signed with a detached `manifest.json.sig` containing a hex Ed25519 signature over the **exact bytes** of `manifest.json`. Re-sign after any edit, including whitespace.
-
----
-
-## Security model
-
-- **Signature is checked before parsing.** Malformed input never reaches the deserializer.
-- **Fails closed.** A bad signature clears the cached manifest instead of leaving stale data scannable.
-- **Path traversal is rejected** at manifest load *and* again at path-join time. `..`, absolute paths, drive letters, backslashes and NUL are all refused.
-- **HTTPS is enforced** for every `downloadUrl` and `sourcePage`, so a signed manifest cannot downgrade a download to an interceptable transport.
-- **Private keys are never committed.** `manifest-keys/` and `.env` are gitignored; CI reads the key from a secret, writes it outside the workspace, and shreds it.
-
-> **Warning**
-> The key currently compiled into the client is a **development key**. Generate a fresh pair and rotate `MARS_MANIFEST_PUBLIC_KEY` before any public release.
-
----
-
-## Why manifests are built at publish time
-
-CurseForge's Core API requires an `x-api-key` header. Shipping that key in the launcher would expose it to every user (trivially extractable from the binary) and breaches the CurseForge for Studios Terms of Use, which prohibit providing API access to third parties.
-
-Resolving CurseForge at publish time instead keeps the key in CI, removes the runtime dependency on CurseForge being up, avoids per-user rate limits, and lets the result be signed.
-
----
-
-## Known limitations
-
-- **Older manifests are not installable.** A manifest containing only CurseForge IDs lacks the filenames, checksums, and URLs required for safe sync; publish a refreshed manifest before using Sync.
-- **CurseForge SHA-1 is used for mod files.** Config and override files use SHA-256. All expected checksums are covered by the signed manifest.
-- **Non-distributable mods require manual installation.** The launcher will not bypass CurseForge's `allowModDistribution` setting.
-- **Data packs require a world target.** The launcher does not guess which save should receive them, so it reports those as manual rather than placing them in an inactive folder.
-- **Sync has no progress bar or cancellation yet.** It processes downloads on a worker thread and reports results when complete.
-- **No launching.** The gate is enforced, but the launch path is unimplemented.
-- **Scanning is unthrottled** — roughly 14 s for ~1300 files, with no progress reporting.
-- **No key rotation path.** A rotated signing key requires a client rebuild.
-- Latency comes from the ping packet round-trip and shows `—` where a proxy drops it.
-- MOTD is flattened to a single line; colour codes are stripped, not rendered.
-
----
-
-## Roadmap
-
-1. Progress reporting, cancellation, and conflict resolution UI for pack sync.
-2. Prism / vanilla launcher integration and the launch path itself.
-3. Voice relay (`voice.nexusgit.info`).
-4. Diagnostics screen surfacing the preserved error detail.
-
----
-
-## Recommended IDE setup
-
-[VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- Automatic profile setup currently supports Windows and NeoForge. The matching NeoForge version must already be installed in Minecraft Launcher.
+- Setup opens Minecraft Launcher after successful sync and verification; the user selects the Mars profile and starts the game there.
+- Sync has no progress bar or cancellation yet, and file scans do not report progress.
+- Rotating the manifest signing key requires rebuilding the client with the matching public key.
+- Voice relay integration is not implemented.
