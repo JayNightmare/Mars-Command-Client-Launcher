@@ -9,7 +9,7 @@ on:
             export_dir:
                 description: "Path to the CurseForge export directory"
                 required: true
-                default: "modpack/Mars Client"
+                default: "modpack/Mars"
             prerelease:
                 description: "Publish as a pre-release (not served to users)"
                 type: boolean
@@ -17,6 +17,10 @@ on:
 
 permissions:
     contents: write
+
+concurrency:
+    group: mars-pack-manifest-release
+    cancel-in-progress: false
 
 jobs:
     publish:
@@ -76,3 +80,79 @@ jobs:
                   files: |
                       manifest-dist/manifest.json
                       manifest-dist/manifest.json.sig
+
+            - name: Deploy signed manifest to Mars API
+              if: ${{ inputs.prerelease == false }}
+              env:
+                  MARS_DEPLOY_HOST: ${{ secrets.MARS_DEPLOY_HOST }}
+                  MARS_DEPLOY_USER: ${{ secrets.MARS_DEPLOY_USER }}
+                  MARS_DEPLOY_SSH_KEY: ${{ secrets.MARS_DEPLOY_SSH_KEY }}
+                  MARS_DEPLOY_KNOWN_HOSTS: ${{ secrets.MARS_DEPLOY_KNOWN_HOSTS }}
+              run: |
+                  set -euo pipefail
+                  : "${MARS_DEPLOY_HOST:?MARS_DEPLOY_HOST secret is not set}"
+                  : "${MARS_DEPLOY_USER:?MARS_DEPLOY_USER secret is not set}"
+                  : "${MARS_DEPLOY_SSH_KEY:?MARS_DEPLOY_SSH_KEY secret is not set}"
+                  : "${MARS_DEPLOY_KNOWN_HOSTS:?MARS_DEPLOY_KNOWN_HOSTS secret is not set}"
+
+                  RELEASE_DIR="/opt/mars-package-api/releases/1.0.0"
+                  RUN_SUFFIX="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+                  STAGING_DIR="${RELEASE_DIR}/.incoming-${RUN_SUFFIX}"
+                  REMOTE="${MARS_DEPLOY_USER}@${MARS_DEPLOY_HOST}"
+                  KEY_FILE="$(mktemp)"
+                  KNOWN_HOSTS_FILE="$(mktemp)"
+                  cleanup() {
+                    ssh -i "$KEY_FILE" -p 22 \
+                      -o IdentitiesOnly=yes \
+                      -o BatchMode=yes \
+                      -o StrictHostKeyChecking=yes \
+                      -o "UserKnownHostsFile=$KNOWN_HOSTS_FILE" \
+                      "$REMOTE" "rm -rf '$STAGING_DIR'" >/dev/null 2>&1 || true
+                    rm -f "$KEY_FILE" "$KNOWN_HOSTS_FILE" \
+                      "${REMOTE_MANIFEST:-}" "${REMOTE_SIGNATURE:-}"
+                  }
+                  trap cleanup EXIT
+
+                  printf '%s\n' "$MARS_DEPLOY_SSH_KEY" > "$KEY_FILE"
+                  printf '%s\n' "$MARS_DEPLOY_KNOWN_HOSTS" > "$KNOWN_HOSTS_FILE"
+                  chmod 600 "$KEY_FILE" "$KNOWN_HOSTS_FILE"
+
+                  SSH_ARGS=(
+                    -i "$KEY_FILE"
+                    -p 22
+                    -o IdentitiesOnly=yes
+                    -o BatchMode=yes
+                    -o StrictHostKeyChecking=yes
+                    -o "UserKnownHostsFile=$KNOWN_HOSTS_FILE"
+                    -o ConnectTimeout=15
+                  )
+                  ssh "${SSH_ARGS[@]}" "$REMOTE" "mkdir -p '$STAGING_DIR'"
+                  scp -i "$KEY_FILE" -P 22 \
+                    -o IdentitiesOnly=yes \
+                    -o BatchMode=yes \
+                    -o StrictHostKeyChecking=yes \
+                    -o "UserKnownHostsFile=$KNOWN_HOSTS_FILE" \
+                    manifest-dist/manifest.json \
+                    manifest-dist/manifest.json.sig \
+                    "${REMOTE}:${STAGING_DIR}/"
+
+                  ssh "${SSH_ARGS[@]}" "$REMOTE" \
+                    "install -m 0644 '$STAGING_DIR/manifest.json.sig' '$RELEASE_DIR/.manifest.json.sig.next-${RUN_SUFFIX}' && \
+                     install -m 0644 '$STAGING_DIR/manifest.json' '$RELEASE_DIR/.manifest.json.next-${RUN_SUFFIX}' && \
+                     mv -f '$RELEASE_DIR/.manifest.json.sig.next-${RUN_SUFFIX}' '$RELEASE_DIR/manifest.json.sig' && \
+                     mv -f '$RELEASE_DIR/.manifest.json.next-${RUN_SUFFIX}' '$RELEASE_DIR/manifest.json'"
+                  ssh "${SSH_ARGS[@]}" "$REMOTE" \
+                    "sudo -n systemctl restart mars-package-api"
+
+                  REMOTE_MANIFEST="$(mktemp)"
+                  REMOTE_SIGNATURE="$(mktemp)"
+                  curl --fail --silent --show-error --retry 5 --retry-delay 2 \
+                    -H 'Cache-Control: no-cache' \
+                    "https://api.nexusgit.info/api/v1/manifest.json?deploy=${RUN_SUFFIX}" \
+                    --output "$REMOTE_MANIFEST"
+                  curl --fail --silent --show-error --retry 5 --retry-delay 2 \
+                    -H 'Cache-Control: no-cache' \
+                    "https://api.nexusgit.info/api/v1/manifest.json.sig?deploy=${RUN_SUFFIX}" \
+                    --output "$REMOTE_SIGNATURE"
+                  cmp manifest-dist/manifest.json "$REMOTE_MANIFEST"
+                  cmp manifest-dist/manifest.json.sig "$REMOTE_SIGNATURE"

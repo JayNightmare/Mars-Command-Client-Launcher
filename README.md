@@ -108,6 +108,23 @@ cargo run --manifest-path src-tauri/Cargo.toml --release --example manifest_tool
 
 `MARS_SKIP_LOCAL_ENV=1` prevents the tool from loading `.env`. The signing command reads the private key file without printing its contents. Verify the signature against the same public key embedded in the client, then deploy the manifest, signature, and payload files to the API release directory.
 
+### Automatic API deployment
+
+The **Publish pack manifest** workflow publishes a GitHub release and, for non-prereleases, deploys `manifest.json` and `manifest.json.sig` to `/opt/mars-package-api/releases/1.0.0`. It stages both files, replaces the signature first and the manifest last, then fetches both public API URLs and compares them byte-for-byte with the build artifacts. Prereleases are not deployed to the live API.
+
+Configure these repository Actions secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `CURSEFORGE_API_KEY` | Approved Core API key used to resolve export metadata. |
+| `MARS_SIGNING_KEY` | Ed25519 private key used to sign the manifest. |
+| `MARS_DEPLOY_HOST` | SSH hostname of the Mars API server. |
+| `MARS_DEPLOY_USER` | Dedicated SSH user allowed to deploy to the release directory. |
+| `MARS_DEPLOY_SSH_KEY` | Private SSH deploy key. |
+| `MARS_DEPLOY_KNOWN_HOSTS` | Pinned `known_hosts` entry for the server; do not discover it during the workflow. |
+
+The deploy user must be able to create a run-specific staging directory, replace files in the release directory, and run `sudo -n systemctl restart mars-package-api`. The restart reloads the API's cached release-file inventory. Keep the SSH key limited to deployment use. The API server does not receive the manifest signing key or CurseForge API key. The workflow serializes releases so two deployments cannot overwrite each other.
+
 ## Security
 
 - The Ed25519 signature authenticates the exact manifest bytes. Re-sign after any edit, including whitespace.
