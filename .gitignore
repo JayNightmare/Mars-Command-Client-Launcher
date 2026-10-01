@@ -176,7 +176,11 @@ vite.config.ts.timestamp-*
 # Turbo Repo
 .turbo
 
-modpack/
+# Track only CurseForge pin metadata; keep large overrides and installed files local.
+modpack/*
+!modpack/Mars/
+modpack/Mars/*
+!modpack/Mars/manifest.json
 manifest-*
 # Generated manifest artifacts
 manifest-dist/

@@ -7,7 +7,7 @@ on:
                 description: "Pack version (e.g. 1.3.0)"
                 required: true
             export_dir:
-                description: "Path to the CurseForge export directory"
+                description: "Repository path containing the small CurseForge manifest.json (overrides optional)"
                 required: true
                 default: "modpack/Mars"
             prerelease:
