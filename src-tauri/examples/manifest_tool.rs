@@ -283,6 +283,7 @@ fn curseforge_install_dir(project: &serde_json::Value) -> Result<Option<&'static
         Some(6) => Ok(Some("mods")),
         Some(12) => Ok(Some("resourcepacks")),
         Some(17) => Ok(None),
+        Some(6552) => Ok(Some("shaderpacks")),
         Some(class_id) => Err(format!(
             "CurseForge project has unsupported Minecraft class ID {class_id}"
         )),
@@ -634,6 +635,10 @@ mod tests {
         assert_eq!(
             curseforge_install_dir(&serde_json::json!({"classId": 12})).unwrap(),
             Some("resourcepacks")
+        );
+        assert_eq!(
+            curseforge_install_dir(&serde_json::json!({"classId": 6552})).unwrap(),
+            Some("shaderpacks")
         );
         assert_eq!(
             curseforge_install_dir(&serde_json::json!({
