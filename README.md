@@ -159,7 +159,3 @@ manifest-dist/               Release manifest and detached signature
 - Sync has no progress bar or cancellation yet, and file scans do not report progress.
 - Rotating the manifest signing key requires rebuilding the client with the matching public key.
 - Voice relay integration is not implemented.
-
-## Roadmap
-
-- Linux support: ship Linux installers and implement Linux-compatible Minecraft profile setup and launcher opening. These flows are currently Windows-only.
