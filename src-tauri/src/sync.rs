@@ -17,6 +17,23 @@ const IO_CHUNK_BYTES: usize = 64 * 1024;
 const STATE_DIR: &str = ".mars-command";
 const STATE_FILE: &str = "installed-state.json";
 
+pub(crate) fn is_persistent_data_path(path: &str) -> bool {
+    let path = path.replace('\\', "/").to_ascii_lowercase();
+    matches!(
+        path.as_str(),
+        "options.txt" | "optionsshaders.txt" | "servers.dat"
+    ) || [
+        "config/",
+        "defaultconfigs/",
+        "kubejs/",
+        "saves/",
+        "screenshots/",
+        "shaderpacks/",
+    ]
+    .iter()
+    .any(|root| path.starts_with(root))
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncIssue {
@@ -33,6 +50,7 @@ pub struct SyncResult {
     pub unchanged_count: u32,
     pub removed_count: u32,
     pub conflict_count: u32,
+    pub preserved_count: u32,
     pub manual_count: u32,
     pub failed_count: u32,
     pub complete: bool,
@@ -49,6 +67,7 @@ impl SyncResult {
             unchanged_count: 0,
             removed_count: 0,
             conflict_count: 0,
+            preserved_count: 0,
             manual_count: 0,
             failed_count: 0,
             complete: false,
@@ -241,7 +260,11 @@ fn read_state(path: &Path) -> InstalledState {
         .unwrap_or_default()
 }
 
-pub fn manifest_matches_installed_state(root: &Path, manifest: &Manifest) -> bool {
+pub fn manifest_matches_installed_state(
+    root: &Path,
+    manifest: &Manifest,
+    preserve_persistent_data: bool,
+) -> bool {
     let path = root.join(STATE_DIR).join(STATE_FILE);
     let Ok(metadata) = std::fs::symlink_metadata(&path) else {
         return false;
@@ -279,6 +302,7 @@ pub fn manifest_matches_installed_state(root: &Path, manifest: &Manifest) -> boo
             return false;
         };
         if !file.mutable
+            && !(preserve_persistent_data && is_persistent_data_path(relative))
             && (applied.hash_algorithm != file.hash_algorithm
                 || !applied.hash.eq_ignore_ascii_case(&file.hash))
         {
@@ -286,10 +310,11 @@ pub fn manifest_matches_installed_state(root: &Path, manifest: &Manifest) -> boo
         }
     }
 
-    !previous
-        .files
-        .keys()
-        .any(|path| is_under_root(path, &previous.managed_roots) && !desired_paths.contains(path))
+    !previous.files.keys().any(|path| {
+        is_under_root(path, &previous.managed_roots)
+            && !desired_paths.contains(path)
+            && !(preserve_persistent_data && is_persistent_data_path(path))
+    })
 }
 
 fn write_state(path: &Path, state: &InstalledState) -> Result<(), String> {
@@ -458,7 +483,7 @@ fn download_file(
     Ok(())
 }
 
-fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
+fn sync_blocking(root: &Path, manifest: &Manifest, preserve_persistent_data: bool) -> SyncResult {
     let mut result = SyncResult::new(manifest.pack_version.clone());
     if !root.is_dir() {
         return SyncResult::failed(
@@ -568,6 +593,20 @@ fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
             continue;
         }
 
+        if preserve_persistent_data && is_persistent_data_path(relative) {
+            if let Some((hash, _)) = &current {
+                result.preserved_count += 1;
+                next_state.files.insert(
+                    relative.to_string(),
+                    AppliedFile {
+                        hash_algorithm: file.hash_algorithm,
+                        hash: hash.clone(),
+                    },
+                );
+                continue;
+            }
+        }
+
         if !file.required && current.is_none() {
             next_state.files.remove(relative);
             continue;
@@ -592,7 +631,10 @@ fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
             }
             continue;
         }
-        if file.mutable && current.is_some() {
+        if file.mutable
+            && current.is_some()
+            && (!is_persistent_data_path(relative) || preserve_persistent_data)
+        {
             let unchanged_since_last_sync = previous.files.get(relative).is_some_and(|applied| {
                 applied.hash_algorithm == file.hash_algorithm
                     && current
@@ -636,6 +678,10 @@ fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
             || !is_safe_relative_path(path)
             || !is_under_root(path, &previous.managed_roots)
         {
+            continue;
+        }
+        if preserve_persistent_data && is_persistent_data_path(path) {
+            result.preserved_count += 1;
             continue;
         }
         let target = match destination(&root, path) {
@@ -690,10 +736,16 @@ fn sync_blocking(root: &Path, manifest: &Manifest) -> SyncResult {
 }
 
 /// Runs file I/O and blocking network reads off the Tauri async executor.
-pub async fn sync_pack(root: PathBuf, manifest: Manifest) -> SyncResult {
-    tauri::async_runtime::spawn_blocking(move || sync_blocking(&root, &manifest))
-        .await
-        .unwrap_or_else(|err| SyncResult::failed(String::new(), format!("Sync task failed: {err}")))
+pub async fn sync_pack(
+    root: PathBuf,
+    manifest: Manifest,
+    preserve_persistent_data: bool,
+) -> SyncResult {
+    tauri::async_runtime::spawn_blocking(move || {
+        sync_blocking(&root, &manifest, preserve_persistent_data)
+    })
+    .await
+    .unwrap_or_else(|err| SyncResult::failed(String::new(), format!("Sync task failed: {err}")))
 }
 
 #[cfg(test)]
@@ -727,12 +779,31 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_player_mod_configuration_and_shader_data_paths() {
+        for path in [
+            "saves/world/level.dat",
+            "screenshots/latest.png",
+            "config/mod.toml",
+            "defaultconfigs/mod-server.toml",
+            "kubejs/server_scripts/main.js",
+            "shaderpacks/custom.zip",
+            "options.txt",
+            "optionsshaders.txt",
+            "servers.dat",
+        ] {
+            assert!(is_persistent_data_path(path), "{path}");
+        }
+        assert!(!is_persistent_data_path("mods/example.jar"));
+        assert!(!is_persistent_data_path("resourcepacks/pack.zip"));
+    }
+
+    #[test]
     fn matching_config_is_recorded_without_download() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("config")).unwrap();
         std::fs::write(root.path().join("config/mars.toml"), b"approved").unwrap();
 
-        let result = sync_blocking(root.path(), &config_manifest("1.0.0", b"approved"));
+        let result = sync_blocking(root.path(), &config_manifest("1.0.0", b"approved"), true);
 
         assert!(result.complete, "{result:?}");
         assert_eq!(result.unchanged_count, 1);
@@ -746,42 +817,98 @@ mod tests {
         std::fs::write(root.path().join("config/mars.toml"), b"approved").unwrap();
         let manifest = config_manifest("1.0.0", b"approved");
 
-        let result = sync_blocking(root.path(), &manifest);
+        let result = sync_blocking(root.path(), &manifest, true);
         assert!(result.complete, "{result:?}");
-        assert!(manifest_matches_installed_state(root.path(), &manifest));
         assert!(manifest_matches_installed_state(
             root.path(),
-            &config_manifest("1.0.0", b"local config edit")
+            &manifest,
+            true
+        ));
+        assert!(manifest_matches_installed_state(
+            root.path(),
+            &config_manifest("1.0.0", b"local config edit"),
+            true
         ));
         let mut changed_asset = config_manifest("1.0.0", b"changed");
         changed_asset.files[0].mutable = false;
         assert!(!manifest_matches_installed_state(
             root.path(),
-            &changed_asset
+            &changed_asset,
+            false
         ));
         assert!(!manifest_matches_installed_state(
             root.path(),
-            &config_manifest("1.1.0", b"approved")
+            &config_manifest("1.1.0", b"approved"),
+            false
         ));
     }
 
     #[test]
-    fn user_modified_config_is_preserved_as_conflict() {
+    fn user_modified_config_is_preserved_when_enabled() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("config")).unwrap();
         std::fs::write(root.path().join("config/mars.toml"), b"approved-v1").unwrap();
 
-        let first = sync_blocking(root.path(), &config_manifest("1.0.0", b"approved-v1"));
+        let first = sync_blocking(root.path(), &config_manifest("1.0.0", b"approved-v1"), true);
         assert!(first.complete, "{first:?}");
 
         std::fs::write(root.path().join("config/mars.toml"), b"my local edit").unwrap();
-        let next = sync_blocking(root.path(), &config_manifest("1.1.0", b"approved-v2"));
+        let next = sync_blocking(root.path(), &config_manifest("1.1.0", b"approved-v2"), true);
 
-        assert_eq!(next.conflict_count, 1);
+        assert!(next.complete, "{next:?}");
+        assert_eq!(next.preserved_count, 1);
         assert_eq!(
             std::fs::read(root.path().join("config/mars.toml")).unwrap(),
             b"my local edit"
         );
+        let mut strict_manifest = config_manifest("1.1.0", b"approved-v2");
+        strict_manifest.files[0].mutable = false;
+        assert!(manifest_matches_installed_state(
+            root.path(),
+            &strict_manifest,
+            true
+        ));
+        assert!(!manifest_matches_installed_state(
+            root.path(),
+            &strict_manifest,
+            false
+        ));
+        let preserved_report = crate::integrity::scan(root.path(), &strict_manifest, true);
+        assert_eq!(preserved_report.modified_count, 1);
+        assert_eq!(preserved_report.corrupt_count, 0);
+        let strict_report = crate::integrity::scan(root.path(), &strict_manifest, false);
+        assert_eq!(strict_report.corrupt_count, 1);
+    }
+
+    #[test]
+    fn obsolete_persistent_files_are_preserved_when_enabled() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("config")).unwrap();
+        std::fs::write(root.path().join("config/mars.toml"), b"approved").unwrap();
+
+        let previous = config_manifest("1.0.0", b"approved");
+        assert!(sync_blocking(root.path(), &previous, true).complete);
+
+        let mut next_manifest = config_manifest("1.1.0", b"unused");
+        next_manifest.files.clear();
+        let result = sync_blocking(root.path(), &next_manifest, true);
+
+        assert!(result.complete, "{result:?}");
+        assert_eq!(result.preserved_count, 1);
+        assert_eq!(
+            std::fs::read(root.path().join("config/mars.toml")).unwrap(),
+            b"approved"
+        );
+        assert!(manifest_matches_installed_state(
+            root.path(),
+            &next_manifest,
+            true
+        ));
+
+        let disabled = sync_blocking(root.path(), &next_manifest, false);
+        assert!(disabled.complete, "{disabled:?}");
+        assert_eq!(disabled.removed_count, 1);
+        assert!(!root.path().join("config/mars.toml").exists());
     }
 
     #[test]
@@ -811,7 +938,7 @@ mod tests {
             mods_dir: Some("mods".into()),
         };
 
-        let result = sync_blocking(root.path(), &manifest);
+        let result = sync_blocking(root.path(), &manifest, true);
         assert!(!result.complete);
         assert_eq!(result.failed_count, 1);
         assert!(result

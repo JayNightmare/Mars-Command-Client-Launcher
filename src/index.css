@@ -31,3 +31,32 @@ button,
 input {
     font: inherit;
 }
+
+html[data-reduced-motion="true"] *,
+html[data-reduced-motion="true"] *::before,
+html[data-reduced-motion="true"] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+}
+
+html[data-text-scale="large"] [class~="text-[9px]"] {
+    font-size: 11px;
+}
+
+html[data-text-scale="large"] [class~="text-[10px]"] {
+    font-size: 12px;
+}
+
+html[data-text-scale="large"] [class~="text-[11px]"] {
+    font-size: 13px;
+}
+
+html[data-text-scale="large"] [class~="text-[12px]"] {
+    font-size: 14px;
+}
+
+html[data-text-scale="large"] [class~="text-[13px]"] {
+    font-size: 16px;
+}

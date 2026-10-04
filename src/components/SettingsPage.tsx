@@ -1,14 +1,33 @@
 import {
+	Accessibility,
+	Bug,
 	Download,
+	ExternalLink,
 	FolderOpen,
+	GitBranch,
+	Globe,
+	Heart,
 	Lock,
 	RefreshCw,
 	Settings2,
 	ShieldCheck,
 } from "lucide-react";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { useState } from "react";
 import { Panel } from "./Panel";
 import { formatClock } from "../lib/format";
+import {
+	getClientPreferences,
+	updateClientPreferences,
+	type ClientPreferences,
+} from "../lib/clientPreferences";
 import type { PackIntegrityState } from "../hooks/usePackIntegrity";
+
+const PROJECT_URL = "https://mars.nexusgit.info/";
+const REPOSITORY_URL =
+	"https://github.com/JayNightmare/Mars-Command-Client-Launcher";
+const ISSUES_URL = `${REPOSITORY_URL}/issues/new`;
+const SPONSORS_URL = "https://github.com/sponsors/JayNightmare";
 
 type Props = {
 	pack: PackIntegrityState;
@@ -21,6 +40,31 @@ export function SettingsPage({
 	refreshingTelemetry,
 	refreshTelemetry,
 }: Props) {
+	const [preferences, setPreferences] = useState(getClientPreferences);
+	const [actionMessage, setActionMessage] = useState<string | null>(null);
+
+	const savePreferences = (updates: Partial<ClientPreferences>) => {
+		try {
+			setPreferences(updateClientPreferences(updates));
+			setActionMessage(null);
+		} catch {
+			setActionMessage("Could not save this preference.");
+		}
+	};
+
+	const runQuickAction = (
+		label: string,
+		action: () => Promise<unknown>,
+	) => {
+		void action()
+			.then(() => setActionMessage(`${label} opened.`))
+			.catch((error: unknown) =>
+				setActionMessage(
+					`Could not open ${label.toLowerCase()}: ${error instanceof Error ? error.message : String(error)}`,
+				),
+			);
+	};
+
 	return (
 		<section className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
 			<div className="mx-auto w-full max-w-4xl space-y-4">
@@ -102,6 +146,55 @@ export function SettingsPage({
 					</Panel>
 
 					<Panel
+						title="Update Data"
+						icon={<ShieldCheck size={14} />}
+					>
+						<label className="flex cursor-pointer items-start gap-3 text-[11px]">
+							<input
+								type="checkbox"
+								checked={
+									pack.preservePersistentData
+								}
+								disabled={
+									pack.savingPersistentData
+								}
+								onChange={(
+									event,
+								) =>
+									pack.updatePersistentDataPreference(
+										event
+											.currentTarget
+											.checked,
+									)
+								}
+								className="mt-0.5 h-4 w-4 accent-cyan-300 disabled:cursor-wait"
+							/>
+							<span>
+								<span className="block text-slate-200">
+									Preserve
+									personal
+									data
+								</span>
+								<span className="mt-1 block leading-4 text-slate-500">
+									Keep
+									existing
+									worlds,
+									mod
+									configs,
+									screenshots,
+									server
+									list,
+									and
+									shaders
+									during
+									pack
+									updates.
+								</span>
+							</span>
+						</label>
+					</Panel>
+
+					<Panel
 						title="Actions"
 						icon={<Download size={14} />}
 					>
@@ -171,7 +264,271 @@ export function SettingsPage({
 							</button>
 						</div>
 					</Panel>
+
+					<Panel
+						title="Launch behavior"
+						icon={<FolderOpen size={14} />}
+					>
+						<label className="flex cursor-pointer items-start gap-3 text-[11px]">
+							<input
+								type="checkbox"
+								checked={
+									preferences.closeClientAfterGameStart
+								}
+								onChange={(
+									event,
+								) =>
+									savePreferences(
+										{
+											closeClientAfterGameStart:
+												event
+													.currentTarget
+													.checked,
+										},
+									)
+								}
+								className="mt-0.5 h-4 w-4 accent-cyan-300"
+							/>
+							<span>
+								<span className="block text-slate-200">
+									Close
+									Mars
+									Command
+									after
+									Minecraft
+									starts
+								</span>
+								<span className="mt-1 block leading-4 text-slate-500">
+									Waits up
+									to 2
+									minutes
+									for the
+									Mars
+									game
+									process.
+								</span>
+							</span>
+						</label>
+					</Panel>
+
+					<Panel
+						title="Accessibility"
+						icon={
+							<Accessibility
+								size={14}
+							/>
+						}
+					>
+						<div className="space-y-4">
+							<label className="flex cursor-pointer items-start gap-3 text-[11px]">
+								<input
+									type="checkbox"
+									checked={
+										preferences.reduceMotion
+									}
+									onChange={(
+										event,
+									) =>
+										savePreferences(
+											{
+												reduceMotion:
+													event
+														.currentTarget
+														.checked,
+											},
+										)
+									}
+									className="mt-0.5 h-4 w-4 accent-cyan-300"
+								/>
+								<span>
+									<span className="block text-slate-200">
+										Reduce
+										motion
+									</span>
+									<span className="mt-1 block leading-4 text-slate-500">
+										Reduces
+										animation
+										and
+										transition
+										effects
+										throughout
+										the
+										client.
+									</span>
+								</span>
+							</label>
+							<label className="flex items-center justify-between gap-3 text-[11px]">
+								<span className="text-slate-200">
+									Text
+									size
+								</span>
+								<select
+									value={
+										preferences.textScale
+									}
+									onChange={(
+										event,
+									) =>
+										savePreferences(
+											{
+												textScale: event
+													.currentTarget
+													.value as ClientPreferences["textScale"],
+											},
+										)
+									}
+									className="rounded-md border border-white/10 bg-slate-900 px-2 py-1.5 text-[11px] text-slate-200"
+								>
+									<option value="normal">
+										Default
+									</option>
+									<option value="large">
+										Larger
+									</option>
+								</select>
+							</label>
+						</div>
+					</Panel>
 				</div>
+
+				<Panel
+					title="Quick actions"
+					icon={<ExternalLink size={14} />}
+				>
+					<div className="grid gap-2 sm:grid-cols-2">
+						<button
+							type="button"
+							disabled={
+								!pack.instanceRoot
+							}
+							onClick={() => {
+								if (
+									pack.instanceRoot
+								)
+									runQuickAction(
+										"Installation folder",
+										() =>
+											openPath(
+												pack.instanceRoot!,
+											),
+									);
+							}}
+							className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/5 px-3 py-2.5 text-left text-[11px] text-slate-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:text-slate-500"
+						>
+							<FolderOpen size={14} />
+							<span className="flex-1">
+								Open
+								installation
+								folder
+							</span>
+						</button>
+						<button
+							type="button"
+							onClick={() =>
+								runQuickAction(
+									"Bug report",
+									() =>
+										openUrl(
+											ISSUES_URL,
+										),
+								)
+							}
+							className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/5 px-3 py-2.5 text-left text-[11px] text-slate-200 transition hover:bg-white/10"
+						>
+							<Bug size={14} />
+							<span className="flex-1">
+								Report a bug
+							</span>
+							<ExternalLink
+								size={12}
+								className="text-slate-500"
+							/>
+						</button>
+						<button
+							type="button"
+							onClick={() =>
+								runQuickAction(
+									"GitHub repository",
+									() =>
+										openUrl(
+											REPOSITORY_URL,
+										),
+								)
+							}
+							className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/5 px-3 py-2.5 text-left text-[11px] text-slate-200 transition hover:bg-white/10"
+						>
+							<GitBranch size={14} />
+							<span className="flex-1">
+								Visit GitHub
+								repository
+							</span>
+							<ExternalLink
+								size={12}
+								className="text-slate-500"
+							/>
+						</button>
+						<button
+							type="button"
+							onClick={() =>
+								runQuickAction(
+									"Project website",
+									() =>
+										openUrl(
+											PROJECT_URL,
+										),
+								)
+							}
+							className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/5 px-3 py-2.5 text-left text-[11px] text-slate-200 transition hover:bg-white/10"
+						>
+							<Globe size={14} />
+							<span className="flex-1">
+								Visit project
+								website
+							</span>
+							<ExternalLink
+								size={12}
+								className="text-slate-500"
+							/>
+						</button>
+						<button
+							type="button"
+							onClick={() =>
+								runQuickAction(
+									"GitHub Sponsors",
+									() =>
+										openUrl(
+											SPONSORS_URL,
+										),
+								)
+							}
+							className="flex items-center gap-2 rounded-lg border border-emerald-300/15 bg-emerald-300/5 px-3 py-2.5 text-left text-[11px] text-emerald-100 transition hover:bg-emerald-300/10"
+						>
+							<Heart size={14} />
+							<span className="flex-1">
+								Fund This
+								Project
+							</span>
+							<ExternalLink
+								size={12}
+								className="text-emerald-200/60"
+							/>
+						</button>
+					</div>
+					<p className="mt-2 text-[10px] leading-4 text-slate-500">
+						GitHub handles sponsorships on
+						the maintainer's page; Mars
+						Command does not collect
+						payments.
+					</p>
+					{actionMessage ? (
+						<p
+							role="status"
+							className="mt-2 text-[10px] text-cyan-200"
+						>
+							{actionMessage}
+						</p>
+					) : null}
+				</Panel>
 
 				<Panel
 					title="Pack Status"
@@ -245,7 +602,7 @@ export function SettingsPage({
 									? `Pack ${pack.syncResult.packVersion} is up to date.`
 									: "Sync stopped with files needing attention.")}
 						</p>
-						<div className="mt-3 grid grid-cols-2 gap-3 text-[10px] sm:grid-cols-5">
+						<div className="mt-3 grid grid-cols-2 gap-3 text-[10px] sm:grid-cols-3 xl:grid-cols-6">
 							<div>
 								<span className="text-slate-500">
 									Installed
@@ -279,6 +636,18 @@ export function SettingsPage({
 										pack
 											.syncResult
 											.unchangedCount
+									}
+								</p>
+							</div>
+							<div>
+								<span className="text-slate-500">
+									Preserved
+								</span>
+								<p className="mt-0.5 font-mono text-emerald-200">
+									{
+										pack
+											.syncResult
+											.preservedCount
 									}
 								</p>
 							</div>

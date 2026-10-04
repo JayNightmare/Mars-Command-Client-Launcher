@@ -1,11 +1,13 @@
 mod integrity;
 pub mod manifest;
 mod minecraft;
+mod process_detection;
+mod repair;
 mod settings;
 mod sync;
 
 use std::path::PathBuf;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -31,6 +33,11 @@ async fn get_minecraft_status(host: String, port: u16) -> MinecraftServerStatus 
 }
 
 #[tauri::command]
+async fn check_installation_repair() -> Result<repair::InstallationRepairStatus, String> {
+    repair::check().await
+}
+
+#[tauri::command]
 async fn refresh_manifest(state: State<'_, ManifestState>) -> Result<ManifestStatus, ()> {
     match manifest::fetch_verified().await {
         Ok((manifest, status)) => {
@@ -48,6 +55,14 @@ async fn refresh_manifest(state: State<'_, ManifestState>) -> Result<ManifestSta
 #[tauri::command]
 fn get_client_settings(app: AppHandle) -> ClientSettings {
     settings::load(&app)
+}
+
+#[tauri::command]
+fn set_preserve_persistent_data(app: AppHandle, preserve: bool) -> Result<ClientSettings, String> {
+    let mut preferences = settings::load(&app);
+    preferences.preserve_persistent_data = preserve;
+    settings::save(&app, &preferences)?;
+    Ok(preferences)
 }
 
 #[tauri::command]
@@ -142,7 +157,8 @@ async fn scan_instance(
         ));
     };
 
-    let Some(root) = settings::load(&app).instance_root else {
+    let preferences = settings::load(&app);
+    let Some(root) = preferences.instance_root else {
         return Ok(IntegrityReport::failed(
             String::new(),
             manifest.pack_version,
@@ -150,10 +166,13 @@ async fn scan_instance(
         ));
     };
 
+    let preserve_persistent_data = preferences.preserve_persistent_data;
     let root = PathBuf::from(root);
-    tauri::async_runtime::spawn_blocking(move || integrity::scan(&root, &manifest))
-        .await
-        .map_err(|err| format!("Integrity scan failed: {err}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        integrity::scan(&root, &manifest, preserve_persistent_data)
+    })
+    .await
+    .map_err(|err| format!("Integrity scan failed: {err}"))
 }
 
 #[tauri::command]
@@ -168,14 +187,20 @@ async fn sync_instance(
         ));
     };
 
-    let Some(root) = settings::load(&app).instance_root else {
+    let preferences = settings::load(&app);
+    let Some(root) = preferences.instance_root else {
         return Ok(sync::SyncResult::failed(
             manifest.pack_version,
             "No Minecraft game folder selected".into(),
         ));
     };
 
-    Ok(sync::sync_pack(PathBuf::from(root), manifest).await)
+    Ok(sync::sync_pack(
+        PathBuf::from(root),
+        manifest,
+        preferences.preserve_persistent_data,
+    )
+    .await)
 }
 
 fn require_launch_ready(report: &IntegrityReport) -> Result<(), String> {
@@ -224,8 +249,10 @@ async fn setup_minecraft_installation(
     let mut preferences = settings::load(&app);
     preferences.instance_root = Some(root.to_string_lossy().to_string());
     settings::save(&app, &preferences)?;
+    let preserve_persistent_data = preferences.preserve_persistent_data;
 
-    let sync_result = sync::sync_pack(root.clone(), manifest.clone()).await;
+    let sync_result =
+        sync::sync_pack(root.clone(), manifest.clone(), preserve_persistent_data).await;
     let root_text = root.to_string_lossy().to_string();
     if !sync_result.complete {
         let message = sync_result
@@ -241,9 +268,11 @@ async fn setup_minecraft_installation(
         }));
     }
 
-    let report = tauri::async_runtime::spawn_blocking(move || integrity::scan(&root, &manifest))
-        .await
-        .map_err(|err| format!("Integrity scan failed: {err}"))?;
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        integrity::scan(&root, &manifest, preserve_persistent_data)
+    })
+    .await
+    .map_err(|err| format!("Integrity scan failed: {err}"))?;
     if let Err(message) = require_launch_ready(&report) {
         return Ok(serde_json::json!({
             "instanceRoot": root_text,
@@ -282,34 +311,36 @@ async fn get_mars_installation_action(
     else {
         return Ok("setup".into());
     };
-    let saved_root = settings::load(&app).instance_root.map(PathBuf::from);
+    let mut preferences = settings::load(&app);
+    let saved_root = preferences.instance_root.clone().map(PathBuf::from);
     let root = saved_root
         .filter(|root| settings::mars_launcher_profile_version(root).is_some())
         .or_else(settings::detect_mars_launcher_instance);
     let Some(root) = root else {
         return Ok("setup".into());
     };
-    if settings::load(&app).instance_root.as_deref() != Some(root.to_string_lossy().as_ref()) {
-        let mut preferences = settings::load(&app);
+    if preferences.instance_root.as_deref() != Some(root.to_string_lossy().as_ref()) {
         preferences.instance_root = Some(root.to_string_lossy().to_string());
         settings::save(&app, &preferences)?;
     }
+    let preserve_persistent_data = preferences.preserve_persistent_data;
     let expected_loader_version = format!("{}-{}", manifest.loader, manifest.loader_version);
     if settings::mars_launcher_profile_version(&root).as_deref()
         != Some(expected_loader_version.as_str())
     {
         return Ok("update".into());
     }
-    if !sync::manifest_matches_installed_state(&root, &manifest) {
+    if !sync::manifest_matches_installed_state(&root, &manifest, preserve_persistent_data) {
         return Ok("update".into());
     }
 
     let scan_root = root.clone();
     let scan_manifest = manifest.clone();
-    let report =
-        tauri::async_runtime::spawn_blocking(move || integrity::scan(&scan_root, &scan_manifest))
-            .await
-            .map_err(|err| format!("Integrity scan failed: {err}"))?;
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        integrity::scan(&scan_root, &scan_manifest, preserve_persistent_data)
+    })
+    .await
+    .map_err(|err| format!("Integrity scan failed: {err}"))?;
     if report.missing_count + report.corrupt_count + report.unreadable_count > 0 {
         return Ok("update".into());
     }
@@ -332,25 +363,56 @@ async fn launch_minecraft_installation(
         .map_err(|_| "Manifest state is unavailable".to_string())?
         .clone()
         .ok_or_else(|| "No trusted manifest is loaded".to_string())?;
-    let root = settings::load(&app)
+    let preferences = settings::load(&app);
+    let root = preferences
         .instance_root
         .map(PathBuf::from)
         .ok_or_else(|| "Set up the Mars installation before launching".to_string())?;
+    let preserve_persistent_data = preferences.preserve_persistent_data;
     let expected_loader_version = format!("{}-{}", manifest.loader, manifest.loader_version);
     if settings::mars_launcher_profile_version(&root).as_deref()
         != Some(expected_loader_version.as_str())
     {
         return Err("The Mars Launcher installation is missing. Set it up first.".into());
     }
-    if !sync::manifest_matches_installed_state(&root, &manifest) {
+    if !sync::manifest_matches_installed_state(&root, &manifest, preserve_persistent_data) {
         return Err("The server manifest changed. Update the Mars installation first.".into());
     }
 
-    let report = tauri::async_runtime::spawn_blocking(move || integrity::scan(&root, &manifest))
-        .await
-        .map_err(|err| format!("Integrity scan failed: {err}"))?;
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        integrity::scan(&root, &manifest, preserve_persistent_data)
+    })
+    .await
+    .map_err(|err| format!("Integrity scan failed: {err}"))?;
     require_launch_ready(&report)?;
     open_minecraft_launcher()
+}
+
+#[tauri::command]
+async fn wait_for_minecraft_client(app: AppHandle) -> Result<bool, String> {
+    let root = settings::load(&app)
+        .instance_root
+        .map(PathBuf::from)
+        .ok_or_else(|| "Set up the Mars installation before waiting for Minecraft".to_string())?;
+    let root = process_detection::canonical_instance_root(&root)?;
+    let started_at = tokio::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(120);
+
+    loop {
+        let scan_root = root.clone();
+        let found = tauri::async_runtime::spawn_blocking(move || {
+            process_detection::has_minecraft_client(&scan_root)
+        })
+        .await
+        .map_err(|err| format!("Minecraft process check failed: {err}"))??;
+        if found {
+            return Ok(true);
+        }
+        if started_at.elapsed() >= timeout {
+            return Ok(false);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
 }
 
 #[cfg(windows)]
@@ -362,9 +424,21 @@ fn open_minecraft_launcher() -> Result<(), String> {
         .map_err(|err| format!("Could not open Minecraft Launcher: {err}"))
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 fn open_minecraft_launcher() -> Result<(), String> {
-    Err("Opening the installed Minecraft Launcher is only supported on Windows.".into())
+    Command::new("minecraft-launcher")
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| {
+            format!(
+                "Could not start `minecraft-launcher` from PATH. Install the official Linux launcher with its conventional command available: {err}"
+            )
+        })
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn open_minecraft_launcher() -> Result<(), String> {
+    Err("Opening the installed Minecraft Launcher is only supported on Windows and Linux.".into())
 }
 
 /// Best-effort native backdrop. Silently no-ops where the effect is
@@ -401,8 +475,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_minecraft_status,
+            check_installation_repair,
             refresh_manifest,
             get_client_settings,
+            set_preserve_persistent_data,
             auto_detect_instance_root,
             select_curseforge_instance,
             choose_instance_root,
@@ -411,7 +487,8 @@ pub fn run() {
             sync_instance,
             setup_minecraft_installation,
             get_mars_installation_action,
-            launch_minecraft_installation
+            launch_minecraft_installation,
+            wait_for_minecraft_client
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getClientPreferences } from "../lib/clientPreferences";
 import type {
 	ClientSettings,
 	IntegrityReport,
@@ -17,6 +19,9 @@ export type PackIntegrityState = {
 	busy: boolean;
 	syncing: boolean;
 	syncResult: SyncResult | null;
+	preservePersistentData: boolean;
+	savingPersistentData: boolean;
+	updatePersistentDataPreference: (enabled: boolean) => void;
 	/** Refetches and re-verifies the manifest, then rescans if a root is set. */
 	refresh: () => void;
 	syncPack: () => void;
@@ -26,6 +31,43 @@ export type PackIntegrityState = {
 };
 
 export type InstallationAction = "setup" | "update" | "launch" | "blocked";
+
+type GameStartWaitResult =
+	| "disabled"
+	| "started"
+	| "timeout"
+	| { error: string };
+
+async function waitForMarsGameStart(): Promise<GameStartWaitResult> {
+	if (!getClientPreferences().closeClientAfterGameStart)
+		return "disabled";
+
+	try {
+		const started = await invoke<boolean>(
+			"wait_for_minecraft_client",
+		);
+		if (!started) return "timeout";
+		await getCurrentWindow()
+			.close()
+			.catch(() => undefined);
+		return "started";
+	} catch (error) {
+		return {
+			error:
+				error instanceof Error
+					? error.message
+					: String(error),
+		};
+	}
+}
+
+function gameStartWaitMessage(result: GameStartWaitResult): string {
+	if (result === "timeout")
+		return "Minecraft did not start within 2 minutes. Mars Command will stay open.";
+	if (typeof result === "object")
+		return `Minecraft process detection failed. Mars Command will stay open: ${result.error}`;
+	return "Mars is verified. Continue in Minecraft Launcher.";
+}
 
 type LauncherSetupResult = {
 	instanceRoot: string;
@@ -47,6 +89,9 @@ export function usePackIntegrity(): PackIntegrityState {
 	const [busy, setBusy] = useState(false);
 	const [syncing, setSyncing] = useState(false);
 	const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+	const [preservePersistentData, setPreservePersistentData] =
+		useState(true);
+	const [savingPersistentData, setSavingPersistentData] = useState(false);
 
 	const inFlight = useRef(false);
 	const syncInFlight = useRef(false);
@@ -76,6 +121,9 @@ export function usePackIntegrity(): PackIntegrityState {
 			if (mounted.current) {
 				setInstallationAction(action);
 				setInstanceRoot(activeRoot);
+				setPreservePersistentData(
+					savedSettings.preservePersistentData,
+				);
 			}
 
 			const scan =
@@ -125,6 +173,36 @@ export function usePackIntegrity(): PackIntegrityState {
 		void runRefresh(instanceRoot);
 	}, [runRefresh, instanceRoot]);
 
+	const updatePersistentDataPreference = useCallback(
+		(enabled: boolean) => {
+			if (savingPersistentData) return;
+			setSavingPersistentData(true);
+			void (async () => {
+				try {
+					const savedSettings =
+						await invoke<ClientSettings>(
+							"set_preserve_persistent_data",
+							{ preserve: enabled },
+						);
+					if (mounted.current) {
+						setPreservePersistentData(
+							savedSettings.preservePersistentData,
+						);
+					}
+				} catch {
+					if (mounted.current)
+						setPreservePersistentData(
+							!enabled,
+						);
+				} finally {
+					if (mounted.current)
+						setSavingPersistentData(false);
+				}
+			})();
+		},
+		[savingPersistentData],
+	);
+
 	const syncPack = useCallback(() => {
 		if (syncInFlight.current) return;
 		syncInFlight.current = true;
@@ -153,6 +231,7 @@ export function usePackIntegrity(): PackIntegrityState {
 						unchangedCount: 0,
 						removedCount: 0,
 						conflictCount: 0,
+						preservedCount: 0,
 						manualCount: 0,
 						failedCount: 1,
 						complete: false,
@@ -174,6 +253,7 @@ export function usePackIntegrity(): PackIntegrityState {
 						unchangedCount: 0,
 						removedCount: 0,
 						conflictCount: 0,
+						preservedCount: 0,
 						manualCount: 0,
 						failedCount: 1,
 						complete: false,
@@ -210,6 +290,7 @@ export function usePackIntegrity(): PackIntegrityState {
 						unchangedCount: 0,
 						removedCount: 0,
 						conflictCount: 0,
+						preservedCount: 0,
 						manualCount: 0,
 						failedCount: 1,
 						complete: false,
@@ -259,10 +340,23 @@ export function usePackIntegrity(): PackIntegrityState {
 					await invoke(
 						"launch_minecraft_installation",
 					);
+					if (
+						getClientPreferences()
+							.closeClientAfterGameStart
+					) {
+						setInstallationMessage(
+							"Minecraft Launcher opened. Waiting for the Mars game process...",
+						);
+					}
+					const waitResult =
+						await waitForMarsGameStart();
+					if (waitResult === "started") return;
 					if (!mounted.current) return;
 					setLauncherOpened(true);
 					setInstallationMessage(
-						"Mars is verified. Continue in Minecraft Launcher.",
+						gameStartWaitMessage(
+							waitResult,
+						),
 					);
 					return;
 				}
@@ -275,7 +369,19 @@ export function usePackIntegrity(): PackIntegrityState {
 				setInstanceRoot(result.instanceRoot);
 				setSyncResult(result.syncResult);
 				setLauncherOpened(result.launcherOpened);
-				setInstallationMessage(result.message);
+				if (
+					result.launcherOpened &&
+					getClientPreferences()
+						.closeClientAfterGameStart
+				) {
+					setInstallationMessage(
+						"Minecraft Launcher opened. Waiting for the Mars game process...",
+					);
+				}
+				const waitResult = result.launcherOpened
+					? await waitForMarsGameStart()
+					: "disabled";
+				if (waitResult === "started") return;
 				const [scan, action] = await Promise.all([
 					invoke<IntegrityReport>(
 						"scan_instance",
@@ -287,6 +393,13 @@ export function usePackIntegrity(): PackIntegrityState {
 				if (mounted.current) {
 					setReport(scan);
 					setInstallationAction(action);
+					setInstallationMessage(
+						result.launcherOpened
+							? gameStartWaitMessage(
+									waitResult,
+								)
+							: result.message,
+					);
 				}
 			} catch (error) {
 				if (mounted.current) {
@@ -331,6 +444,9 @@ export function usePackIntegrity(): PackIntegrityState {
 		busy,
 		syncing,
 		syncResult,
+		preservePersistentData,
+		savingPersistentData,
+		updatePersistentDataPreference,
 		refresh,
 		syncPack,
 		setupLauncherInstallation,

@@ -59,6 +59,7 @@ export type SyncResult = {
 	unchangedCount: number;
 	removedCount: number;
 	conflictCount: number;
+	preservedCount: number;
 	manualCount: number;
 	failedCount: number;
 	complete: boolean;
@@ -68,4 +69,5 @@ export type SyncResult = {
 
 export type ClientSettings = {
 	instanceRoot: string | null;
+	preservePersistentData: boolean;
 };

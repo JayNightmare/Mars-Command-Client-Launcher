@@ -1,13 +1,17 @@
-import { Cloud, Cpu, Users, Volume2 } from "lucide-react";
+import { Cloud, Cpu } from "lucide-react";
 import { useMemo, useState } from "react";
 import "./App.css";
 import "./index.css";
 import { DeploymentPanel } from "./components/DeploymentPanel";
+import {
+	CrewChannelPanel,
+	MissionControlPanel,
+} from "./components/MissionControlPanel";
 import { Panel } from "./components/Panel";
 import { ServerStatusPanel } from "./components/ServerStatusPanel";
 import { SettingsPage } from "./components/SettingsPage";
-import { StatusDot } from "./components/StatusDot";
 import { TitleBar } from "./components/TitleBar";
+import { useMissionControlConfig } from "./hooks/useMissionControlConfig";
 import { useMarsServerStatus } from "./hooks/useMarsServerStatus";
 import { usePackIntegrity } from "./hooks/usePackIntegrity";
 import { EM_DASH, formatClock, normalizeMotd } from "./lib/format";
@@ -49,10 +53,15 @@ function TelemetryRow({
 }
 
 function App() {
+	const {
+		target: missionControlTarget,
+		updateTarget,
+		storageError,
+	} = useMissionControlConfig();
 	const { status, loading, refreshing, refresh, lastSuccessfulCheck } =
 		useMarsServerStatus({
-			host: MARS_SERVER.host,
-			port: MARS_SERVER.port,
+			host: missionControlTarget.host,
+			port: missionControlTarget.port,
 			refreshIntervalMs: STATUS_REFRESH_INTERVAL_MS,
 		});
 
@@ -106,53 +115,20 @@ function App() {
 								refreshing={
 									refreshing
 								}
-								host={
-									MARS_SERVER.host
-								}
+								host={`${missionControlTarget.host}:${missionControlTarget.port}`}
 							/>
 
-							<Panel
-								title="Mission Control"
-								icon={
-									<Volume2
-										size={
-											14
-										}
-									/>
+							<MissionControlPanel
+								target={
+									missionControlTarget
 								}
-							>
-								<div className="space-y-2.5">
-									<div className="flex items-center justify-between">
-										<span className="text-[11px] text-slate-300">
-											Voice
-											relay
-										</span>
-										<span className="flex items-center gap-1.5 text-[10px] text-slate-500">
-											<StatusDot tone="idle" />
-											NOT
-											CONFIGURED
-										</span>
-									</div>
-
-									<div className="rounded-lg border border-white/8 bg-black/15 px-2.5 py-2 font-mono text-[11px] text-slate-300">
-										{
-											MARS_SERVER.voiceEndpoint
-										}
-									</div>
-
-									<p className="text-[11px] leading-4 text-slate-400">
-										The
-										moon
-										has
-										been
-										informed
-										of
-										your
-										intended
-										arrival.
-									</p>
-								</div>
-							</Panel>
+								onApply={
+									updateTarget
+								}
+								storageError={
+									storageError
+								}
+							/>
 
 							<div className="flex-1" />
 						</aside>
@@ -275,31 +251,18 @@ function App() {
 								</div>
 							</Panel>
 
-							<Panel
-								title="Crew Channel"
-								icon={
-									<Users
-										size={
-											14
-										}
-									/>
+							<CrewChannelPanel
+								status={status}
+								loading={
+									loading
 								}
-							>
-								<p className="text-[11px] leading-4 text-slate-400">
-									Mars
-									Command
-									does not
-									publish
-									a
-									personnel
-									roster.
-									Only
-									aggregate
-									counts
-									are
-									transmitted.
-								</p>
-							</Panel>
+								refreshing={
+									refreshing
+								}
+								onRefresh={
+									refresh
+								}
+							/>
 
 							<div className="flex-1" />
 						</aside>

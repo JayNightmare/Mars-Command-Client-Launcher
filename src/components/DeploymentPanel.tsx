@@ -1,16 +1,31 @@
 import {
 	Boxes,
 	Download,
+	ExternalLink,
 	Lock,
 	LoaderCircle,
+	RefreshCw,
 	ShieldCheck,
 	ShieldX,
 	TriangleAlert,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { useEffect, useState } from "react";
 import { Panel } from "./Panel";
 import { EM_DASH, formatBytes, formatClock, formatNumber } from "../lib/format";
 import type { PackIntegrityState } from "../hooks/usePackIntegrity";
 import type { FileVerdict, IntegrityReport } from "../types/manifest";
+
+type InstallationRepairStatus = {
+	installedVersion: string;
+	latestVersion: string | null;
+	assetUrl: string | null;
+	releaseUrl: string | null;
+	updateAvailable: boolean;
+	platform: string;
+	message: string | null;
+};
 
 const VERDICT_LABEL: Record<FileVerdict, string> = {
 	ok: "Verified",
@@ -70,6 +85,52 @@ export function DeploymentPanel({
 	launcherOpened,
 	setupLauncherInstallation,
 }: PackIntegrityState) {
+	const [repairStatus, setRepairStatus] =
+		useState<InstallationRepairStatus | null>(null);
+	const [repairChecking, setRepairChecking] = useState(true);
+	const [repairCheckError, setRepairCheckError] = useState<string | null>(
+		null,
+	);
+	const [repairOpenError, setRepairOpenError] = useState<string | null>(
+		null,
+	);
+	const [repairCheckAttempt, setRepairCheckAttempt] = useState(0);
+	const [openingRepair, setOpeningRepair] = useState(false);
+
+	useEffect(() => {
+		let active = true;
+		setRepairChecking(true);
+		setRepairCheckError(null);
+		void invoke<InstallationRepairStatus>(
+			"check_installation_repair",
+		)
+			.then((status) => {
+				if (active) setRepairStatus(status);
+			})
+			.catch((error: unknown) => {
+				if (active) setRepairCheckError(String(error));
+			})
+			.finally(() => {
+				if (active) setRepairChecking(false);
+			});
+		return () => {
+			active = false;
+		};
+	}, [repairCheckAttempt]);
+
+	const openRepairInstaller = async () => {
+		if (!repairStatus?.assetUrl) return;
+		setOpeningRepair(true);
+		setRepairOpenError(null);
+		try {
+			await openUrl(repairStatus.assetUrl);
+		} catch (error) {
+			setRepairOpenError(String(error));
+		} finally {
+			setOpeningRepair(false);
+		}
+	};
+
 	const severity = severityOf(report);
 	const verified =
 		manifest?.available === true && manifest.signatureValid;
@@ -323,6 +384,157 @@ export function DeploymentPanel({
 						? "SETTING UP MARS..."
 						: actionLabel}
 				</button>
+				<div className="mt-2 border-t border-white/8 pt-2">
+					{repairChecking ? (
+						<p className="text-center text-[10px] text-slate-500">
+							Checking for a
+							compatible setup
+							release...
+						</p>
+					) : repairCheckError ? (
+						<div className="flex items-center justify-between gap-2 text-[10px] text-amber-200/80">
+							<span
+								className="min-w-0 truncate"
+								title={
+									repairCheckError
+								}
+							>
+								Release check
+								failed:{" "}
+								{
+									repairCheckError
+								}
+							</span>
+							<button
+								type="button"
+								className="shrink-0 text-cyan-200 hover:text-cyan-100"
+								onClick={() =>
+									setRepairCheckAttempt(
+										(
+											attempt,
+										) =>
+											attempt +
+											1,
+									)
+								}
+								title="Check GitHub releases again"
+							>
+								<RefreshCw
+									size={
+										12
+									}
+								/>
+							</button>
+						</div>
+					) : repairStatus?.updateAvailable &&
+					  repairStatus.assetUrl ? (
+						<div className="rounded-lg border border-amber-300/20 bg-amber-300/5 p-2.5">
+							<div className="flex items-center justify-between gap-2">
+								<div className="min-w-0">
+									<p className="text-[10px] font-semibold tracking-wide text-amber-100">
+										INSTALLATION
+										REPAIR
+										AVAILABLE
+									</p>
+									<p className="mt-0.5 text-[10px] text-slate-300">
+										Installed{" "}
+										{
+											repairStatus.installedVersion
+										}{" "}
+										·
+										Latest
+										compatible{" "}
+										{
+											repairStatus.latestVersion
+										}
+									</p>
+								</div>
+								<button
+									type="button"
+									disabled={
+										openingRepair
+									}
+									onClick={() =>
+										void openRepairInstaller()
+									}
+									className="flex shrink-0 items-center gap-1.5 rounded-md border border-amber-200/25 bg-amber-200/10 px-2.5 py-1.5 text-[10px] font-semibold text-amber-100 hover:bg-amber-200/15 disabled:opacity-50"
+									title="Open the compatible installer download in your browser"
+								>
+									{openingRepair ? (
+										<LoaderCircle
+											size={
+												12
+											}
+											className="animate-spin"
+										/>
+									) : (
+										<ExternalLink
+											size={
+												12
+											}
+										/>
+									)}
+									Download
+								</button>
+							</div>
+							<p className="mt-1.5 text-[10px] leading-4 text-slate-400">
+								The download
+								opens in your
+								browser. Close
+								Mars Command and
+								run the
+								installer
+								yourself; it
+								will not be
+								started
+								automatically.
+							</p>
+							{repairOpenError ? (
+								<p
+									role="alert"
+									className="mt-1 text-[10px] text-red-200"
+								>
+									Could
+									not open
+									the
+									download:{" "}
+									{
+										repairOpenError
+									}
+								</p>
+							) : null}
+						</div>
+					) : (
+						<div className="flex items-center justify-between gap-2 text-[10px] text-slate-500">
+							<span className="min-w-0 truncate">
+								{repairStatus?.message ??
+									`Setup build ${repairStatus?.installedVersion ?? ""} is current.`}
+							</span>
+							{repairStatus?.message ? (
+								<button
+									type="button"
+									className="shrink-0 text-cyan-200 hover:text-cyan-100"
+									onClick={() =>
+										setRepairCheckAttempt(
+											(
+												attempt,
+											) =>
+												attempt +
+												1,
+										)
+									}
+									title="Check GitHub releases again"
+								>
+									<RefreshCw
+										size={
+											12
+										}
+									/>
+								</button>
+							) : null}
+						</div>
+					)}
+				</div>
 			</div>
 		</Panel>
 	);

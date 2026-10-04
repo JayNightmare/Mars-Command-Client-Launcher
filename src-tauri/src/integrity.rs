@@ -115,7 +115,7 @@ fn hash_file(path: &Path) -> std::io::Result<(String, u64)> {
 }
 
 /// Blocking: call from `spawn_blocking`.
-pub fn scan(root: &Path, manifest: &Manifest) -> IntegrityReport {
+pub fn scan(root: &Path, manifest: &Manifest, preserve_persistent_data: bool) -> IntegrityReport {
     let root_display = root.display().to_string();
     let pack_version = manifest.pack_version.clone();
 
@@ -173,15 +173,17 @@ pub fn scan(root: &Path, manifest: &Manifest) -> IntegrityReport {
         expected.insert(entry.path.clone());
 
         let absolute = resolve(root, &entry.path);
+        let mutable = entry.mutable
+            || (preserve_persistent_data && crate::sync::is_persistent_data_path(&entry.path));
         let verdict = match std::fs::metadata(&absolute) {
             Err(_) if entry.required => FileVerdict::Missing,
             Err(_) => FileVerdict::Ok, // optional and absent is a valid state
             Ok(metadata) if !metadata.is_file() => FileVerdict::Corrupt,
-            Ok(metadata) if metadata.len() != entry.size && !entry.mutable => FileVerdict::Corrupt,
+            Ok(metadata) if metadata.len() != entry.size && !mutable => FileVerdict::Corrupt,
             Ok(_) => match hash_file(&absolute) {
                 Err(_) => FileVerdict::Unreadable,
                 Ok((digest, _)) if digest.eq_ignore_ascii_case(&entry.sha256) => FileVerdict::Ok,
-                Ok(_) if entry.mutable => FileVerdict::Modified,
+                Ok(_) if mutable => FileVerdict::Modified,
                 Ok(_) => FileVerdict::Corrupt,
             },
         };
@@ -469,7 +471,7 @@ mod tests {
             mods_dir: Some("mods".into()),
         };
 
-        let report = scan(root.path(), &manifest);
+        let report = scan(root.path(), &manifest, false);
         assert_eq!(report.mods_expected, 2);
         assert_eq!(report.mods_present, 1);
         assert_eq!(report.mods_foreign, 1);
@@ -522,7 +524,7 @@ mod tests {
             mods_dir: Some("mods".into()),
         };
 
-        let report = scan(root.path(), &manifest);
+        let report = scan(root.path(), &manifest, false);
         assert_eq!(report.mods_expected, 2);
         assert_eq!(report.mods_present, 1);
         assert_eq!(report.mods_foreign, 1);
@@ -557,7 +559,7 @@ mod tests {
             mods_dir: Some("mods".into()),
         };
 
-        let report = scan(root.path(), &manifest);
+        let report = scan(root.path(), &manifest, false);
         assert_eq!(report.ok_count, 1);
         assert_eq!(report.mods_expected, 0);
         assert_eq!(report.mods_present, 0);
@@ -584,7 +586,7 @@ mod tests {
             mods_dir: Some("mods".into()),
         };
 
-        let report = scan(root.path(), &manifest);
+        let report = scan(root.path(), &manifest, false);
         assert_eq!(report.manual_unresolved, 1);
         assert_eq!(report.mods_expected, 0);
         assert!(report.mods_fully_verified);

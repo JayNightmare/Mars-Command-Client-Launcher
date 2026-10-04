@@ -22,6 +22,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+fastnbt = "2"
+flate2 = "1"
 tokio = { version = "1", features = ["net", "io-util", "time", "rt"] }
 hickory-resolver = { version = "0.24", default-features = false, features = ["tokio-runtime", "system-config"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
