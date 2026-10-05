@@ -3,6 +3,9 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[cfg(any(target_os = "linux", test))]
 const CLIENT_MAIN_CLASSES: &[&str] = &[
     "net.minecraft.client.main.Main",
@@ -122,6 +125,7 @@ fn linux_has_minecraft_client(instance_root: &Path) -> Result<bool, String> {
 #[cfg(target_os = "windows")]
 fn windows_has_minecraft_client(instance_root: &Path) -> Result<bool, String> {
     use std::io::Read;
+    use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -145,6 +149,7 @@ if ($null -eq $found) { 'false' } else { 'true' }
     let root = instance_root.to_string_lossy();
     let mut child = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", QUERY])
+        .creation_flags(CREATE_NO_WINDOW)
         .env("MARS_INSTANCE_ROOT", root.as_ref())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
