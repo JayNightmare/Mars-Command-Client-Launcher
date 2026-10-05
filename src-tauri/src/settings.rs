@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, fs, io::Read, io::Write};
 
 use fastnbt::Value as NbtValue;
-use flate2::read::GzDecoder;
+use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::{Deserialize, Serialize};
@@ -294,18 +294,31 @@ fn register_minecraft_profile(
     Ok(game_dir)
 }
 
+fn decode_minecraft_server_list(bytes: &[u8]) -> Result<HashMap<String, NbtValue>, String> {
+    let mut nbt = Vec::new();
+    if bytes.starts_with(&[0x1f, 0x8b]) {
+        GzDecoder::new(bytes)
+            .read_to_end(&mut nbt)
+            .map_err(|err| format!("Could not decompress Minecraft server list: {err}"))?;
+    } else if bytes.len() >= 2
+        && bytes[0] & 0x0f == 8
+        && (u16::from(bytes[0]) * 256 + u16::from(bytes[1])) % 31 == 0
+    {
+        ZlibDecoder::new(bytes)
+            .read_to_end(&mut nbt)
+            .map_err(|err| format!("Could not decompress Minecraft server list: {err}"))?;
+    } else {
+        nbt.extend_from_slice(bytes);
+    }
+
+    fastnbt::from_bytes(&nbt)
+        .map_err(|err| format!("Minecraft server list contains invalid NBT: {err}"))
+}
+
 fn ensure_mars_server_in_list(game_dir: &std::path::Path) -> Result<(), String> {
     let path = game_dir.join("servers.dat");
     let mut root = match fs::read(&path) {
-        Ok(compressed) => {
-            let mut decoder = GzDecoder::new(compressed.as_slice());
-            let mut nbt = Vec::new();
-            decoder
-                .read_to_end(&mut nbt)
-                .map_err(|err| format!("Could not decompress Minecraft server list: {err}"))?;
-            fastnbt::from_bytes::<HashMap<String, NbtValue>>(&nbt)
-                .map_err(|err| format!("Minecraft server list contains invalid NBT: {err}"))?
-        }
+        Ok(bytes) => decode_minecraft_server_list(&bytes)?,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
         Err(err) => return Err(format!("Could not read Minecraft server list: {err}")),
     };
@@ -523,7 +536,7 @@ mod tests {
     use super::{find_curseforge_mars_instance, register_minecraft_profile, ClientSettings};
     use fastnbt::Value as NbtValue;
     use flate2::read::GzDecoder;
-    use flate2::write::GzEncoder;
+    use flate2::write::{GzEncoder, ZlibEncoder};
     use flate2::Compression;
     use std::collections::HashMap;
     use std::io::{Read, Write};
@@ -642,6 +655,42 @@ mod tests {
             NbtValue::String(format!("{MARS_SERVER_HOST}:{MARS_SERVER_PORT}"))
         );
         assert_eq!(std::fs::read(&server_list_path).unwrap(), first_write);
+    }
+
+    #[test]
+    fn accepts_uncompressed_and_zlib_encoded_server_lists() {
+        let mut original: HashMap<String, NbtValue> = HashMap::new();
+        original.insert("servers".into(), NbtValue::List(Vec::new()));
+        let raw = fastnbt::to_bytes(&original).unwrap();
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&raw).unwrap();
+        let zlib = encoder.finish().unwrap();
+
+        for bytes in [raw, zlib] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("servers.dat");
+            std::fs::write(&path, bytes).unwrap();
+            ensure_mars_server_in_list(root.path()).unwrap();
+
+            let servers_dat = decode_servers_dat(&path);
+            let NbtValue::List(servers) = &servers_dat["servers"] else {
+                panic!("servers tag must remain a list");
+            };
+            assert_eq!(servers.len(), 1);
+        }
+    }
+
+    #[test]
+    fn leaves_unrecognized_server_list_data_untouched() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("servers.dat");
+        let original = b"unrecognized server list data";
+        std::fs::write(&path, original).unwrap();
+
+        let error = ensure_mars_server_in_list(root.path()).unwrap_err();
+
+        assert!(error.contains("invalid NBT"));
+        assert_eq!(std::fs::read(path).unwrap(), original);
     }
 
     #[test]

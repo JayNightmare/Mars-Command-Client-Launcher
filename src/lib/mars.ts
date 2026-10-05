@@ -1,4 +1,6 @@
 import type { Transmission } from "../types/mars";
+import dotenv from "dotenv";
+dotenv.config();
 
 export const MARS_SERVER = {
 	host: "play.nexusgit.info",
@@ -11,7 +13,8 @@ export const MARS_SERVER = {
 
 export const STATUS_REFRESH_INTERVAL_MS = 15_000;
 
-export const CLIENT_BUILD = "0.1.0";
+// Get the current client build version from the package metadata.
+export const CLIENT_BUILD = process.env.npm_package_version;
 
 /** Local placeholder feed until a signed manifest feed exists. */
 export const LOCAL_TRANSMISSIONS: Transmission[] = [
@@ -42,11 +45,13 @@ export function describePopulation(
 	}
 
 	const players = status.playersOnline ?? 0;
-	if (players <= 0) return "No personnel detected. The moon remains observant.";
+	if (players <= 0)
+		return "No personnel detected. The moon remains observant.";
 	if (players === 1) {
 		return "One personnel unit is operating without supervision.";
 	}
-	if (players <= 3) return "Small expedition underway. Risk level: acceptable-ish.";
+	if (players <= 3)
+		return "Small expedition underway. Risk level: acceptable-ish.";
 	if (players <= 6) {
 		return "Multiple personnel units detected. Safety paperwork pending.";
 	}
