@@ -1,6 +1,5 @@
 import type { Transmission } from "../types/mars";
-import dotenv from "dotenv";
-dotenv.config();
+import packageJson from "../../package.json";
 
 export const MARS_SERVER = {
 	host: "play.nexusgit.info",
@@ -13,8 +12,8 @@ export const MARS_SERVER = {
 
 export const STATUS_REFRESH_INTERVAL_MS = 15_000;
 
-// Get the current client build version from the package metadata.
-export const CLIENT_BUILD = process.env.npm_package_version;
+// Get the current client build version from package metadata.
+export const CLIENT_BUILD = packageJson.version;
 
 /** Local placeholder feed until a signed manifest feed exists. */
 export const LOCAL_TRANSMISSIONS: Transmission[] = [
