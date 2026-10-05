@@ -1,12 +1,12 @@
 # Mars Command
 
-Mars Command is a Windows desktop companion for the **Mars** modded Minecraft server. It monitors server status, verifies the signed pack manifest, syncs an isolated game directory, and registers the installation in Minecraft Launcher.
+Mars Command is a Windows and Linux desktop companion for the **Mars** modded Minecraft server. It monitors server status, verifies the signed pack manifest, syncs an isolated game directory, and registers the installation in Minecraft Launcher.
 
 | | |
 | --- | --- |
 | Minecraft | 1.21.1 |
 | Loader | NeoForge 21.1.250 |
-| Server | `play.nexusgit.info` |
+| Server | `play.nexusgit.info:25565` |
 | Voice | `voice.nexusgit.info` (not yet integrated) |
 
 ## Features
@@ -15,21 +15,26 @@ Mars Command is a Windows desktop companion for the **Mars** modded Minecraft se
 
 The Rust backend polls the Minecraft Java status protocol every 15 seconds and reports online state, player count, latency, MOTD, and server build. Polling avoids overlapping checks and pauses while the window is hidden. The Mars proxy requires protocol version `767` for Minecraft 1.21.1; the conventional `-1` sentinel is rejected.
 
+Mission Control lets users change the host and port used for dashboard status polling; the target is stored locally and does not change the Minecraft Launcher server entry. The Crew Channel currently shows only aggregate player presence. The server API does not yet provide roster or messaging endpoints.
+
 ### Signed pack verification
 
 The client fetches `manifest.json` and `manifest.json.sig` from the Mars API. It verifies the detached Ed25519 signature against the public key compiled into the application before trusting the manifest. Invalid signatures fail closed.
 
 Each managed file, including mod JARs, is verified using its signed SHA-256 and size. Unlisted JARs in managed directories are reported as foreign. Config and default-config files are mutable: local edits are preserved and reported as conflicts. Sync stages downloads, validates them before replacement, and removes obsolete files only when they still match the last installed hash.
 
+The **Preserve personal data** setting is enabled by default. During updates it keeps existing worlds, screenshots, mod configuration, shader packs, server-list entries, and selected Minecraft options. Missing baseline files are still installed. Turn the setting off to let normal pack updates replace or remove managed files in those locations.
+
 ### Isolated Minecraft installation
 
 Setup creates a Minecraft Launcher profile named `Mars Client <pack version>` and an isolated game directory:
 
 ```text
-%APPDATA%\.minecraft\mars-client\<pack-version>
+Windows: %APPDATA%\.minecraft\mars-client\<pack-version>
+Linux:   ~/.minecraft/mars-client/<pack-version>
 ```
 
-The shared `%APPDATA%\.minecraft\mods` folder is left untouched. Setup uses the matching NeoForge version already installed in Minecraft Launcher, preserves other profiles and account data, syncs the signed pack, verifies it, and opens the official launcher. Close Minecraft Launcher before Setup or Update so its profile file is not being edited concurrently.
+The shared `.minecraft/mods` folder is left untouched. Setup uses the matching NeoForge version already installed in Minecraft Launcher, preserves other profiles and account data, adds or updates the Mars server entry in the isolated profile's server list, syncs the signed pack, verifies it, and opens the launcher. On Linux, the launcher must be available as `minecraft-launcher` on `PATH`. Close Minecraft Launcher before Setup or Update so its profile file is not being edited concurrently. The default maximum Java heap allocation is 6 GB.
 
 The dashboard remembers the installation and offers:
 
@@ -40,9 +45,17 @@ The dashboard remembers the installation and offers:
 | `LAUNCH` | The installation matches the current signed manifest and passes integrity checks. |
 | `BLOCKED` | Required files or mods need attention, or there is no trusted manifest. |
 
-Launch rechecks integrity but does not rewrite the profile or sync again. Minecraft Launcher handles Microsoft sign-in; select the Mars profile and click **Play** there. Mars Command does not directly start the game process.
+Launch rechecks integrity but does not rewrite the profile or sync again. Minecraft Launcher handles Microsoft sign-in; select the Mars profile and click **Play** there. When enabled in Settings, Mars Command waits up to two minutes for the Java process using the configured Mars game directory, then closes itself. It does not directly start the game process.
+
+Settings also provides reduced-motion and larger-text accessibility options, plus quick actions to open the installation folder, report a bug, and visit the project links. **Fund This Project** opens GitHub Sponsors; payments are handled by GitHub, not Mars Command.
 
 World-specific data packs are not placed into a save automatically; they remain manual until a world target is selected.
+
+## Client Releases
+
+The **Build client installers** workflow runs when a `client-vX.Y.Z` tag is pushed. Before tagging, set the same `X.Y.Z` version in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`. The workflow validates those versions, builds a Windows NSIS installer and Linux Debian package, then publishes them as `setup-X.Y.Z.exe` and `setup-X.Y.Z.deb` assets on the GitHub release. Building the tagged release publishes it; do not push a tag until both installers are intended for release.
+
+The in-app repair check compares the installed client version with stable GitHub release assets. It prefers versioned installer names and also recognizes a generic `setup.exe` or `setup.deb` when the release tag contains a valid version. The user opens and runs the downloaded installer; Mars Command never installs an update silently.
 
 ## Release API
 
@@ -56,7 +69,7 @@ The API serves release artifacts but does not need the Ed25519 private key. Depl
 
 ## Development
 
-Prerequisites: Node.js, Rust, and the [Tauri v2 prerequisites](https://tauri.app/start/prerequisites/).
+Prerequisites: Node.js, Rust, and the [Tauri v2 prerequisites](https://tauri.app/start/prerequisites/) for your platform.
 
 ```powershell
 npm install
@@ -80,9 +93,9 @@ $env:MARS_MANIFEST_PUBLIC_KEY = "<production public key in hex>"
 npm run tauri -- build
 ```
 
-`MARS_MANIFEST_BASE_URL` and `MARS_MANIFEST_PUBLIC_KEY` are compile-time overrides. Rust `option_env!` does not automatically read `.env`. Bundles are written under `src-tauri\target\release\bundle\` (NSIS and MSI where available).
+`MARS_MANIFEST_BASE_URL` and `MARS_MANIFEST_PUBLIC_KEY` are compile-time overrides. Rust `option_env!` does not automatically read `.env`. On Linux, install the Tauri Linux prerequisites and build a Debian package with `npm run tauri -- build --bundles deb`. Bundles are written under `src-tauri/target/release/bundle/` (NSIS/MSI on Windows and `.deb` on Linux).
 
-Before public distribution, set a product name/version in `src-tauri/tauri.conf.json`, use a production keypair whose public key is embedded in the client, and code-sign the Windows installer if you want to reduce SmartScreen warnings. Never ship the private signing key or an API JWT in the app.
+Before public distribution, use a production keypair whose public key is embedded in the client, and code-sign the Windows installer if you want to reduce SmartScreen warnings. Never ship the private signing key or an API JWT in the app.
 
 ## Generate A Manifest
 
@@ -141,7 +154,9 @@ src-tauri/src/
   minecraft.rs               DNS/SRV resolution and Java status protocol
   manifest.rs                Manifest schema, fetch, signature verification
   integrity.rs               Hash-based file and mod verification
-  settings.rs                Persistent game path and Launcher profile setup
+  settings.rs                Persistent settings, server list, and Launcher profiles
+  process_detection.rs       Windows/Linux Minecraft process detection
+  repair.rs                  GitHub release installer version checks
   sync.rs                    Staged sync and installed-state tracking
   lib.rs                     Tauri commands and Setup/Update/Launch status
 src-tauri/examples/
@@ -154,8 +169,9 @@ manifest-dist/               Release manifest and detached signature
 
 ## Limitations
 
-- Automatic profile setup currently supports Windows and NeoForge. The matching NeoForge version must already be installed in Minecraft Launcher.
-- Setup opens Minecraft Launcher after successful sync and verification; the user selects the Mars profile and starts the game there.
+- Automatic profile setup supports Windows and Linux with NeoForge. The matching NeoForge version must already be installed in Minecraft Launcher.
+- Linux launcher opening expects `minecraft-launcher` on `PATH`; other launcher locations and distributions are not auto-detected.
+- The Crew Channel has aggregate player count only until the server exposes a roster and messaging API.
 - Sync has no progress bar or cancellation yet, and file scans do not report progress.
 - Rotating the manifest signing key requires rebuilding the client with the matching public key.
 - Voice relay integration is not implemented.
