@@ -260,6 +260,22 @@ fn read_state(path: &Path) -> InstalledState {
         .unwrap_or_default()
 }
 
+pub(crate) fn installed_managed_paths(root: &Path) -> Result<HashSet<String>, String> {
+    let path = crate::personal_mods::safe_path(root, ".mars-command/installed-state.json")?;
+    let body = match std::fs::read(path) {
+        Ok(body) => body,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(err) => return Err(format!("Could not read signed pack ownership: {err}")),
+    };
+    let state: InstalledState = serde_json::from_slice(&body)
+        .map_err(|err| format!("Invalid signed pack ownership: {err}"))?;
+    Ok(state
+        .files
+        .keys()
+        .map(|path| path.to_ascii_lowercase())
+        .collect())
+}
+
 pub fn manifest_matches_installed_state(
     root: &Path,
     manifest: &Manifest,
@@ -484,6 +500,9 @@ fn download_file(
 }
 
 fn sync_blocking(root: &Path, manifest: &Manifest, preserve_persistent_data: bool) -> SyncResult {
+    if let Err(err) = crate::personal_mods::protect_sync(root, manifest) {
+        return SyncResult::failed(manifest.pack_version.clone(), err);
+    }
     let mut result = SyncResult::new(manifest.pack_version.clone());
     if !root.is_dir() {
         return SyncResult::failed(
@@ -752,6 +771,52 @@ pub async fn sync_pack(
 mod tests {
     use super::*;
     use crate::manifest::FileSide;
+
+    #[test]
+    fn signed_sync_preserves_personal_mods_even_without_preserve_data_setting() {
+        use crate::personal_mods::{
+            self,
+            tests::{jar, manifest, metadata, signed_file},
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("1.0.0");
+        std::fs::create_dir_all(root.join("mods")).unwrap();
+        let bytes = jar(&metadata("base_mod", "[1.21.1]", "[21.1,22)"));
+        std::fs::write(root.join("mods/base.jar"), &bytes).unwrap();
+        let mut pack = manifest("1.0.0");
+        pack.files.push(signed_file("base.jar", &bytes));
+        assert!(sync_blocking(&root, &pack, false).complete);
+        let source = temp.path().join("personal.jar");
+        std::fs::write(&source, jar(&metadata("personal", "[1.21.1]", "[21.1,22)"))).unwrap();
+        let selected = personal_mods::preview(&root, &pack, &source).unwrap();
+        personal_mods::install(&root, &pack, &source, &selected.file.sha256, true).unwrap();
+        let personal_bytes = std::fs::read(root.join("mods/personal.jar")).unwrap();
+        let mut next = pack.clone();
+        next.files.clear();
+        let result = sync_blocking(&root, &next, false);
+        assert!(result.complete);
+        assert_eq!(result.removed_count, 1);
+        assert_eq!(
+            std::fs::read(root.join("mods/personal.jar")).unwrap(),
+            personal_bytes
+        );
+        assert!(manifest_matches_installed_state(&root, &next, false));
+        assert_eq!(
+            crate::integrity::scan(&root, &next, false).personal_mods[0].status,
+            "installed"
+        );
+
+        next.files
+            .push(signed_file("personal.jar", b"new signed contents"));
+        assert!(!sync_blocking(&root, &next, false).complete);
+        assert_eq!(
+            std::fs::read(root.join("mods/personal.jar")).unwrap(),
+            personal_bytes
+        );
+        assert!(!installed_managed_paths(&root)
+            .unwrap()
+            .contains("mods/personal.jar"));
+    }
 
     fn config_manifest(version: &str, content: &[u8]) -> Manifest {
         Manifest {

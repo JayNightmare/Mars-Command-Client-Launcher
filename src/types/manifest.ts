@@ -43,8 +43,30 @@ export type IntegrityReport = {
 	modsPresent: number;
 	modsForeign: number;
 	modsFullyVerified: boolean;
+	personalMods: PersonalModStatus[];
 	drift: FileDrift[];
 	error: string | null;
+};
+
+export type PersonalMod = {
+	fileName: string;
+	sha256: string;
+	size: number;
+	modIds: string[];
+};
+
+export type PersonalModStatus = {
+	file: PersonalMod;
+	status: "installed" | "missing" | "changed" | "unreadable" | "incompatible";
+	message: string | null;
+};
+
+export type PersonalModPreview = {
+	sourcePath: string;
+	instanceRoot: string;
+	packVersion: string;
+	file: PersonalMod;
+	warnings: string[];
 };
 
 export type SyncIssue = {

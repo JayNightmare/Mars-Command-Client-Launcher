@@ -21,7 +21,7 @@ Mission Control lets users change the host and port used for dashboard status po
 
 The client fetches `manifest.json` and `manifest.json.sig` from the Mars API. It verifies the detached Ed25519 signature against the public key compiled into the application before trusting the manifest. Invalid signatures fail closed.
 
-Each managed file, including mod JARs, is verified using its signed SHA-256 and size. Unlisted JARs in managed directories are reported as foreign. Config and default-config files are mutable: local edits are preserved and reported as conflicts. Sync stages downloads, validates them before replacement, and removes obsolete files only when they still match the last installed hash.
+Each managed file, including mod JARs, is verified using its signed SHA-256 and size. Unlisted JARs in managed directories are reported as foreign unless they are explicitly tracked personal mods with matching local checksums and passing metadata checks. Personal mods never contribute to signed verification counts. Config and default-config files are mutable: local edits are preserved and reported as conflicts. Sync stages downloads, validates them before replacement, and removes obsolete files only when they still match the last installed hash.
 
 The **Preserve personal data** setting is enabled by default. During updates it keeps existing worlds, screenshots, mod configuration, shader packs, server-list entries, and selected Minecraft options. Missing baseline files are still installed. Turn the setting off to let normal pack updates replace or remove managed files in those locations.
 
@@ -51,11 +51,26 @@ Settings also provides reduced-motion and larger-text accessibility options, plu
 
 World-specific data packs are not placed into a save automatically; they remain manual until a world target is selected.
 
+### Personal client mods
+
+After setting up the current Mars installation, open **Settings -> Personal Mods -> Select local mod JAR**. The native file picker imports one local JAR at a time; nothing is uploaded to a server. Review its mod IDs, size, compatibility warnings, and trust notice, acknowledge the risks, then choose **Install personal mod**. Select **Remove** and confirm to remove a tracked mod from the current instance. Close Minecraft first; changes are blocked while its Mars game process is running.
+
+- Limits: a non-empty `.jar`, at most **64 MiB** per file and **128 personal JARs** per instance. Filenames must contain only letters, numbers, dots, hyphens, and underscores; hidden names and Windows device names are rejected.
+- Validation reads bounded NeoForge TOML metadata inside the JAR. Fabric/Quilt/plain JARs, malformed archives/metadata, Forge-only requirements, signed-pack filename collisions, duplicate filenames/checksums/mod IDs, and known incompatible client Minecraft/NeoForge/FML ranges or required dependencies are blocked before copying. Existing mods' declared conflicts with the new mod are also checked. FML is checked against the installed NeoForge launcher metadata when available.
+- Missing constraints, unresolved version expressions/non-numeric Maven qualifiers, unavailable FML metadata, and bundled Jar-in-Jar modules are disclosed as compatibility warnings. Bundled dependency resolution is not certified; unresolved required top-level dependencies are blocked. Metadata cannot prove that a mod is client-only, safe to execute, or accepted by the server. The acknowledgement is not a signature or malware scan.
+- Files are copied only into the standard `mods` folder of `.minecraft/mars-client/<pack-version>`. Arbitrary/CurseForge/shared game folders and redirected instance/mod/state directories are not personal-mod install targets. Copies are staged without overwriting existing files and revalidated against the preview checksum. The local inventory is stored separately in `.mars-command/personal-mods.json`, never in the signed manifest or signed installed-file list.
+- Normal signed updates preserve tracked personal JARs, even when **Preserve personal data** is off. Both dashboard **UPDATE** and Settings **Sync / update pack** create the new versioned Mars instance when needed and copy its personal inventory/JARs without deleting the previous version. A filename collision or changed/unreadable source stops migration with an error; remove the conflicting personal mod from the old instance and retry, or inspect changed files manually. A newly incompatible mod remains preserved but blocks launch until removed.
+- Integrity results distinguish **installed (local checksum matches, unsigned)**, **missing**, **changed**, **unreadable**, and **incompatible** personal mods. Unknown/untracked JARs still remain foreign and block launch. A damaged inventory fails closed. Removal never deletes untracked/signed pack files or a personal JAR whose bytes changed; inspect that file manually, and then remove its missing inventory entry in Settings if appropriate.
+
+Personal mod management requires a trusted signed manifest. Remote storage, submission, and community browsing are not part of this local flow.
+
 ## Client Releases
 
 The **Build client installers** workflow runs when a `client-vX.Y.Z` tag is pushed. Before tagging, set the same `X.Y.Z` version in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`. The workflow validates those versions, builds a Windows NSIS installer and Linux Debian package, then publishes them as `setup-X.Y.Z.exe` and `setup-X.Y.Z.deb` assets on the GitHub release. Building the tagged release publishes it; do not push a tag until both installers are intended for release.
 
-The in-app repair check compares the installed client version with stable GitHub release assets. It prefers versioned installer names and also recognizes a generic `setup.exe` or `setup.deb` when the release tag contains a valid version. The user opens and runs the downloaded installer; Mars Command never installs an update silently.
+The in-app client update check uses stable, non-prerelease GitHub releases and selects the newest installer compatible with the current platform: `setup-X.Y.Z.exe` on Windows or `setup-X.Y.Z.deb` on Linux. For older releases it also accepts `setup.exe` or `setup.deb` when the release tag contains a valid version; a versioned asset is preferred when both names are published. Drafts, prereleases, unsupported platforms, and assets for another platform are not offered.
+
+When an update is available, choose **Open installer** to open its download in your browser. After it finishes, close Mars Command, open the downloaded installer, follow its prompts, and relaunch Mars Command. No installer runs or installs silently. If the release check cannot reach GitHub, retry after checking your connection or open the [GitHub releases page](https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases). If no compatible stable asset is published, check that page for `setup-X.Y.Z.exe` or `setup-X.Y.Z.deb` (or the legacy generic name), then retry the check later.
 
 ## Release API
 

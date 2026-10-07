@@ -15,6 +15,7 @@ import {
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { Panel } from "./Panel";
+import { PersonalModsPanel } from "./PersonalModsPanel";
 import { formatClock } from "../lib/format";
 import {
 	getClientPreferences,
@@ -83,6 +84,8 @@ export function SettingsPage({
 					</div>
 				</header>
 
+				<PersonalModsPanel pack={pack} />
+
 				<div className="grid gap-4 md:grid-cols-2">
 					<Panel
 						title="Minecraft Installation"
@@ -118,6 +121,7 @@ export function SettingsPage({
 									onClick={
 										pack.chooseInstanceRoot
 									}
+									disabled={pack.personalModBusy || pack.syncing || pack.busy}
 									className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/5 px-3 py-2 text-[11px] text-slate-200 transition hover:bg-white/10"
 								>
 									<FolderOpen
@@ -135,6 +139,7 @@ export function SettingsPage({
 										onClick={
 											pack.clearInstanceRoot
 										}
+										disabled={pack.personalModBusy || pack.syncing || pack.busy}
 										className="rounded-lg px-3 py-2 text-[11px] text-slate-500 transition hover:bg-white/5 hover:text-slate-200"
 									>
 										Forget
@@ -228,7 +233,8 @@ export function SettingsPage({
 								}
 								disabled={
 									pack.busy ||
-									pack.syncing
+									pack.syncing ||
+									pack.personalModBusy
 								}
 								className="flex w-full items-center justify-between gap-3 rounded-lg border border-white/8 bg-white/5 px-3 py-2.5 text-left text-[11px] text-slate-200 transition hover:bg-white/10 disabled:cursor-wait disabled:text-slate-400"
 							>

@@ -4,6 +4,8 @@ use std::time::Duration;
 const RELEASES_URL: &str =
     "https://api.github.com/repos/JayNightmare/Mars-Command-Client-Launcher/releases?per_page=100";
 const INSTALLED_VERSION: &str = env!("CARGO_PKG_VERSION");
+const RELEASE_PAGE_URL: &str =
+    "https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct SetupVersion(u64, u64, u64);
@@ -26,6 +28,7 @@ struct GitHubAsset {
 #[derive(Debug)]
 struct ReleaseCandidate {
     version: SetupVersion,
+    versioned_asset: bool,
     asset_url: String,
     release_url: String,
 }
@@ -85,15 +88,15 @@ fn latest_compatible_candidate(
         .filter(|release| !release.draft && !release.prerelease)
         .flat_map(|release| {
             release.assets.iter().filter_map(move |asset| {
-                let version =
-                    parse_setup_asset_version(&asset.name, expected_extension).or_else(|| {
-                        let generic_name = format!("setup.{expected_extension}");
-                        asset
-                            .name
-                            .eq_ignore_ascii_case(&generic_name)
-                            .then(|| parse_version(&release.tag_name))
-                            .flatten()
-                    })?;
+                let versioned_version = parse_setup_asset_version(&asset.name, expected_extension);
+                let version = versioned_version.or_else(|| {
+                    let generic_name = format!("setup.{expected_extension}");
+                    asset
+                        .name
+                        .eq_ignore_ascii_case(&generic_name)
+                        .then(|| parse_version(&release.tag_name))
+                        .flatten()
+                })?;
                 if !asset.browser_download_url.starts_with("https://")
                     || !release.html_url.starts_with("https://")
                 {
@@ -101,12 +104,13 @@ fn latest_compatible_candidate(
                 }
                 Some(ReleaseCandidate {
                     version,
+                    versioned_asset: versioned_version.is_some(),
                     asset_url: asset.browser_download_url.clone(),
                     release_url: release.html_url.clone(),
                 })
             })
         })
-        .max_by_key(|candidate| candidate.version)
+        .max_by_key(|candidate| (candidate.version, candidate.versioned_asset))
 }
 
 #[cfg(target_os = "windows")]
@@ -145,18 +149,34 @@ pub async fn check() -> Result<InstallationRepairStatus, String> {
         .user_agent(concat!("MarsCommand/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(12))
         .build()
-        .map_err(|error| format!("Could not create release checker: {error}"))?;
-    let releases = client
+        .map_err(|_| {
+            "Could not start the stable release check. Restart Mars Command and try again."
+                .to_string()
+        })?;
+    let response = client
         .get(RELEASES_URL)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .send()
         .await
-        .map_err(|error| format!("Could not check GitHub releases: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("GitHub releases returned an error: {error}"))?
+        .map_err(|_| {
+            format!(
+                "Could not reach GitHub Releases. Check your internet connection and retry, or open {RELEASE_PAGE_URL} to check for a stable installer."
+            )
+        })?;
+    let response = response.error_for_status().map_err(|error| {
+        format!(
+            "GitHub Releases is temporarily unavailable ({}). Try again later, or open {RELEASE_PAGE_URL} to check for a stable installer.",
+            error.status().map_or_else(|| "unknown status".into(), |status| format!("HTTP {status}"))
+        )
+    })?;
+    let releases = response
         .json::<Vec<GitHubRelease>>()
         .await
-        .map_err(|error| format!("Could not parse GitHub releases: {error}"))?;
+        .map_err(|_| {
+            format!(
+                "Could not read the GitHub release information. Retry the check, or open {RELEASE_PAGE_URL} and look for a stable installer."
+            )
+        })?;
 
     let Some(candidate) = latest_compatible_candidate(&releases, extension) else {
         return Ok(InstallationRepairStatus {
@@ -167,8 +187,7 @@ pub async fn check() -> Result<InstallationRepairStatus, String> {
             update_available: false,
             platform: platform.to_string(),
             message: Some(format!(
-                "No compatible setup-{0}.{1} asset was found in public releases.",
-                "X.X.X", extension
+                "No stable {platform} installer is available yet. Look for setup-X.Y.Z.{extension} (or the legacy setup.{extension}) on the releases page, then retry this check."
             )),
         });
     };
@@ -233,6 +252,29 @@ mod tests {
 
         assert_eq!(candidate.version, parse_version("1.2.4").unwrap());
         assert!(candidate.asset_url.ends_with("setup.exe"));
+
+        let generic = release("setup.deb", "1.2.4");
+        let candidate = latest_compatible_candidate(&[generic], "deb").unwrap();
+        assert!(candidate.asset_url.ends_with("setup.deb"));
+    }
+
+    #[test]
+    fn prefers_versioned_asset_when_legacy_and_versioned_assets_share_a_release() {
+        let mut release = release("setup.exe", "1.2.4");
+        release.assets.push(GitHubAsset {
+            name: "setup-1.2.4.exe".into(),
+            browser_download_url: "https://example.com/setup-1.2.4.exe".into(),
+        });
+
+        let candidate = latest_compatible_candidate(&[release], "exe").unwrap();
+        assert!(candidate.asset_url.ends_with("setup-1.2.4.exe"));
+    }
+
+    #[test]
+    fn returns_no_candidate_when_only_other_platform_assets_are_published() {
+        let releases = [release("setup-1.2.4.deb", "1.2.4")];
+
+        assert!(latest_compatible_candidate(&releases, "exe").is_none());
     }
 
     #[test]

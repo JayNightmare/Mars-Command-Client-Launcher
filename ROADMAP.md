@@ -2,10 +2,10 @@
 
 ## Milestone 1: Personal client mods
 
-- [ ] Add a mod selection/upload flow for a user's isolated Mars installation.
-- [ ] Validate supported file type, size, duplicate/conflicting files, and Minecraft/NeoForge compatibility before install; show clear errors and compatibility warnings.
-- [ ] Install and remove user mods in the isolated instance without changing the signed base pack or shared `.minecraft/mods` directory.
-- [ ] Preserve user-installed mods during normal signed pack updates, and make their status visible in integrity results.
+- [x] Add a mod selection/upload flow for a user's isolated Mars installation.
+- [x] Validate supported file type, size, duplicate/conflicting files, and Minecraft/NeoForge compatibility before install; show clear errors and compatibility warnings.
+- [x] Install and remove user mods in the isolated instance without changing the signed base pack or shared `.minecraft/mods` directory.
+- [x] Preserve user-installed mods during normal signed pack updates, and make their status visible in integrity results.
 
 ## Milestone 2: Remote mod library
 
@@ -29,8 +29,8 @@
 
 ## Milestone 5: Client update completion
 
-- [ ] Complete the Update Client flow around the existing stable-release check: clearly present the available installer, require the user's confirmation, and explain how to finish installation.
-- [ ] Document supported release assets and recovery behavior when a release or download is unavailable.
+- [x] Complete the Update Client flow around the existing stable-release check: clearly present the available installer, require the user's confirmation, and explain how to finish installation.
+- [x] Document supported release assets and recovery behavior when a release or download is unavailable.
 
 ## Existing foundations
 

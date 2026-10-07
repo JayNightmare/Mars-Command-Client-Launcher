@@ -1,7 +1,7 @@
 //! Read-only integrity scan of a local Mars instance against a verified manifest.
 //!
-//! This milestone intentionally does not repair, download or delete anything —
-//! it only reports drift.
+//! Signed pack verification and personal inventory checks remain separate.
+//! Scanning reports drift without repairing, downloading or deleting files.
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -57,6 +57,8 @@ pub struct IntegrityReport {
     pub mods_present: u32,
     pub mods_foreign: u32,
     pub mods_fully_verified: bool,
+    /// Local inventory checks are never included in signed verification counts.
+    pub personal_mods: Vec<crate::personal_mods::ModStatus>,
     /// Capped list for display; counts above are always complete.
     pub drift: Vec<FileDrift>,
     pub error: Option<String>,
@@ -80,6 +82,7 @@ impl IntegrityReport {
             mods_present: 0,
             mods_foreign: 0,
             mods_fully_verified: false,
+            personal_mods: Vec::new(),
             drift: Vec::new(),
             error: Some(error),
         }
@@ -159,6 +162,7 @@ pub fn scan(root: &Path, manifest: &Manifest, preserve_persistent_data: bool) ->
         mods_present: 0,
         mods_foreign: 0,
         mods_fully_verified: true,
+        personal_mods: Vec::new(),
         drift: Vec::new(),
         error: None,
     };
@@ -197,7 +201,20 @@ pub fn scan(root: &Path, manifest: &Manifest, preserve_persistent_data: bool) ->
         report.record(entry.path.clone(), verdict);
     }
 
-    scan_curseforge_assets(root, manifest, &mut report, &mut expected);
+    let mut personal_paths = HashSet::new();
+    match crate::personal_mods::statuses(root, manifest) {
+        Ok(statuses) => {
+            for status in &statuses {
+                if status.status == "installed" {
+                    personal_paths.insert(format!("{mods_dir}/{}", status.file.file_name));
+                }
+            }
+            report.personal_mods = statuses;
+        }
+        Err(err) => report.error = Some(err),
+    }
+    scan_curseforge_assets(root, manifest, &mut report, &mut expected, &personal_paths);
+    expected.extend(personal_paths);
 
     let mut managed_dirs = manifest.managed_dirs.clone();
     managed_dirs.extend(manifest.curseforge_mods.iter().filter_map(|file| {
@@ -290,6 +307,7 @@ fn scan_curseforge_assets(
     manifest: &Manifest,
     report: &mut IntegrityReport,
     expected: &mut HashSet<String>,
+    personal_paths: &HashSet<String>,
 ) {
     let mods_dir = manifest.mods_dir.as_deref().unwrap_or("mods");
     let mod_files: Vec<_> = required_mods(manifest).collect();
@@ -387,7 +405,11 @@ fn scan_curseforge_assets(
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-            if !expected_mod_names.contains(&name) {
+            if !expected_mod_names.contains(&name)
+                && !personal_paths
+                    .iter()
+                    .any(|path| path.eq_ignore_ascii_case(&format!("{mods_dir}/{name}")))
+            {
                 report.mods_foreign += 1;
             }
         }

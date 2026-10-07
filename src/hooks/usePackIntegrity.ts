@@ -6,6 +6,7 @@ import type {
 	ClientSettings,
 	IntegrityReport,
 	ManifestStatus,
+	PersonalModPreview,
 	SyncResult,
 } from "../types/manifest";
 
@@ -28,6 +29,13 @@ export type PackIntegrityState = {
 	setupLauncherInstallation: () => void;
 	chooseInstanceRoot: () => void;
 	clearInstanceRoot: () => void;
+	personalModPreview: PersonalModPreview | null;
+	personalModBusy: boolean;
+	personalModMessage: string | null;
+	choosePersonalMod: () => void;
+	installPersonalMod: () => void;
+	cancelPersonalMod: () => void;
+	removePersonalMod: (fileName: string) => void;
 };
 
 export type InstallationAction = "setup" | "update" | "launch" | "blocked";
@@ -92,6 +100,9 @@ export function usePackIntegrity(): PackIntegrityState {
 	const [preservePersistentData, setPreservePersistentData] =
 		useState(true);
 	const [savingPersistentData, setSavingPersistentData] = useState(false);
+	const [personalModPreview, setPersonalModPreview] = useState<PersonalModPreview | null>(null);
+	const [personalModBusy, setPersonalModBusy] = useState(false);
+	const [personalModMessage, setPersonalModMessage] = useState<string | null>(null);
 
 	const inFlight = useRef(false);
 	const syncInFlight = useRef(false);
@@ -133,8 +144,11 @@ export function usePackIntegrity(): PackIntegrityState {
 						)
 					: null;
 			if (mounted.current) setReport(scan);
-		} catch {
-			// IPC-level faults leave the previous state visible.
+		} catch (error) {
+			if (mounted.current) {
+				setInstallationMessage(`Could not refresh pack integrity: ${String(error)}`);
+				setInstallationAction("blocked");
+			}
 		} finally {
 			inFlight.current = false;
 			if (mounted.current) setBusy(false);
@@ -172,6 +186,59 @@ export function usePackIntegrity(): PackIntegrityState {
 	const refresh = useCallback(() => {
 		void runRefresh(instanceRoot);
 	}, [runRefresh, instanceRoot]);
+
+	const runPersonalModAction = useCallback(
+		(action: () => Promise<void>) => {
+			if (syncInFlight.current || inFlight.current) return;
+			syncInFlight.current = true;
+			setPersonalModBusy(true);
+			setPersonalModMessage(null);
+			void action().catch((error: unknown) => {
+				if (mounted.current) setPersonalModMessage(String(error));
+			}).finally(() => {
+				syncInFlight.current = false;
+				if (mounted.current) setPersonalModBusy(false);
+			});
+		},
+		[],
+	);
+
+	const choosePersonalMod = useCallback(() => {
+		runPersonalModAction(async () => {
+			setPersonalModPreview(null);
+			const preview = await invoke<PersonalModPreview | null>("choose_personal_mod");
+			if (mounted.current) setPersonalModPreview(preview);
+		});
+	}, [runPersonalModAction]);
+
+	const installPersonalMod = useCallback(() => {
+		if (!personalModPreview) return;
+		runPersonalModAction(async () => {
+			await invoke("install_personal_mod", {
+				sourcePath: personalModPreview.sourcePath,
+				expectedHash: personalModPreview.file.sha256,
+				expectedRoot: personalModPreview.instanceRoot,
+				expectedPackVersion: personalModPreview.packVersion,
+				acceptWarnings: true,
+			});
+			if (!mounted.current) return;
+			setPersonalModPreview(null);
+			setPersonalModMessage(`${personalModPreview.file.fileName} installed locally.`);
+			await runRefresh(instanceRoot);
+		});
+	}, [personalModPreview, runPersonalModAction, runRefresh, instanceRoot]);
+
+	const cancelPersonalMod = useCallback(() => setPersonalModPreview(null), []);
+
+	const removePersonalMod = useCallback((fileName: string) => {
+		if (!report) return;
+		runPersonalModAction(async () => {
+			await invoke("remove_personal_mod", { fileName, expectedRoot: report.root });
+			if (!mounted.current) return;
+			setPersonalModMessage(`${fileName} removed from this instance.`);
+			await runRefresh(instanceRoot);
+		});
+	}, [report, runPersonalModAction, runRefresh, instanceRoot]);
 
 	const updatePersistentDataPreference = useCallback(
 		(enabled: boolean) => {
@@ -269,6 +336,8 @@ export function usePackIntegrity(): PackIntegrityState {
 					);
 				if (!mounted.current) return;
 				setSyncResult(result);
+				const savedSettings = await invoke<ClientSettings>("get_client_settings");
+				if (mounted.current) setInstanceRoot(savedSettings.instanceRoot);
 				const scan =
 					await invoke<IntegrityReport>(
 						"scan_instance",
@@ -452,5 +521,12 @@ export function usePackIntegrity(): PackIntegrityState {
 		setupLauncherInstallation,
 		chooseInstanceRoot,
 		clearInstanceRoot,
+		personalModPreview,
+		personalModBusy,
+		personalModMessage,
+		choosePersonalMod,
+		installPersonalMod,
+		cancelPersonalMod,
+		removePersonalMod,
 	};
 }

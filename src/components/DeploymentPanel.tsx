@@ -27,6 +27,9 @@ type InstallationRepairStatus = {
 	message: string | null;
 };
 
+const RELEASES_PAGE_URL =
+	"https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases";
+
 const VERDICT_LABEL: Record<FileVerdict, string> = {
 	ok: "Verified",
 	missing: "Missing",
@@ -53,6 +56,7 @@ function severityOf(report: IntegrityReport | null): "clean" | "warn" | "bad" {
 			report.unreadableCount >
 			0 ||
 		report.modsPresent !== report.modsExpected
+		|| report.personalMods.some((entry) => entry.status !== "installed")
 	) {
 		return "bad";
 	}
@@ -81,6 +85,7 @@ export function DeploymentPanel({
 	instanceRoot,
 	installationAction,
 	syncing,
+	personalModBusy,
 	installationMessage,
 	launcherOpened,
 	setupLauncherInstallation,
@@ -125,9 +130,22 @@ export function DeploymentPanel({
 		try {
 			await openUrl(repairStatus.assetUrl);
 		} catch (error) {
-			setRepairOpenError(String(error));
+			setRepairOpenError(
+				`Could not open the installer download. Check your default browser, or open the GitHub releases page manually. (${String(error)})`,
+			);
 		} finally {
 			setOpeningRepair(false);
+		}
+	};
+
+	const openReleasesPage = async () => {
+		setRepairOpenError(null);
+		try {
+			await openUrl(RELEASES_PAGE_URL);
+		} catch (error) {
+			setRepairOpenError(
+				`Could not open the GitHub releases page. Visit ${RELEASES_PAGE_URL} in your browser. (${String(error)})`,
+			);
 		}
 	};
 
@@ -271,6 +289,19 @@ export function DeploymentPanel({
 				<p className="mt-3 text-[11px] leading-4 text-slate-400">
 					{summary}
 				</p>
+				{scanned && report.personalMods.length > 0 ? (
+					<div className="mt-2 text-[10px] leading-4 text-cyan-200">
+						{report.personalMods.length} personal mod(s), unsigned and separate from signed verification. Manage in Settings.
+						<ul className="max-h-24 overflow-y-auto pr-1">
+							{report.personalMods.map((entry) => (
+								<li key={entry.file.fileName} className={entry.status === "installed" ? "" : "text-amber-200"}>
+									{entry.file.fileName}: {entry.status === "installed" ? "local checksum matches" : entry.status}
+									{entry.message ? ` - ${entry.message}` : ""}
+								</li>
+							))}
+						</ul>
+					</div>
+				) : null}
 
 				{manifest?.manualDownloadCount ? (
 					<p className="mt-2 flex items-start gap-1.5 text-[10px] leading-4 text-amber-200/80">
@@ -354,7 +385,7 @@ export function DeploymentPanel({
 				</p>
 				<button
 					type="button"
-					disabled={!canAct || syncing}
+					disabled={!canAct || syncing || personalModBusy}
 					onClick={setupLauncherInstallation}
 					title={
 						!canAct
@@ -392,39 +423,43 @@ export function DeploymentPanel({
 							release...
 						</p>
 					) : repairCheckError ? (
-						<div className="flex items-center justify-between gap-2 text-[10px] text-amber-200/80">
-							<span
-								className="min-w-0 truncate"
-								title={
-									repairCheckError
-								}
-							>
-								Release check
+						<div className="space-y-1.5 text-[10px] text-amber-200/80">
+							<p role="status">
+								Stable update check
 								failed:{" "}
-								{
-									repairCheckError
-								}
-							</span>
-							<button
-								type="button"
-								className="shrink-0 text-cyan-200 hover:text-cyan-100"
-								onClick={() =>
-									setRepairCheckAttempt(
-										(
-											attempt,
-										) =>
-											attempt +
-											1,
-									)
-								}
-								title="Check GitHub releases again"
-							>
-								<RefreshCw
-									size={
-										12
+								{repairCheckError}
+							</p>
+							<div className="flex items-center gap-3">
+								<button
+									type="button"
+									className="flex items-center gap-1 text-cyan-200 hover:text-cyan-100"
+									onClick={() =>
+										setRepairCheckAttempt(
+											(attempt) =>
+												attempt +
+												1,
+										)
 									}
-								/>
-							</button>
+									title="Retry the stable release check"
+								>
+									<RefreshCw
+										size={12}
+									/>
+									Retry check
+								</button>
+								<button
+									type="button"
+									className="flex items-center gap-1 text-cyan-200 hover:text-cyan-100"
+									onClick={() =>
+										void openReleasesPage()
+									}
+								>
+									<ExternalLink
+										size={12}
+									/>
+									Open releases page
+								</button>
+							</div>
 						</div>
 					) : repairStatus?.updateAvailable &&
 					  repairStatus.assetUrl ? (
@@ -432,21 +467,20 @@ export function DeploymentPanel({
 							<div className="flex items-center justify-between gap-2">
 								<div className="min-w-0">
 									<p className="text-[10px] font-semibold tracking-wide text-amber-100">
-										INSTALLATION
-										REPAIR
-										AVAILABLE
+										STABLE CLIENT
+										UPDATE AVAILABLE
 									</p>
 									<p className="mt-0.5 text-[10px] text-slate-300">
 										Installed{" "}
 										{
 											repairStatus.installedVersion
 										}{" "}
-										·
-										Latest
-										compatible{" "}
+										· Stable{" "}
 										{
 											repairStatus.latestVersion
 										}
+										{" "}for{" "}
+										{repairStatus.platform}
 									</p>
 								</div>
 								<button
@@ -458,7 +492,7 @@ export function DeploymentPanel({
 										void openRepairInstaller()
 									}
 									className="flex shrink-0 items-center gap-1.5 rounded-md border border-amber-200/25 bg-amber-200/10 px-2.5 py-1.5 text-[10px] font-semibold text-amber-100 hover:bg-amber-200/15 disabled:opacity-50"
-									title="Open the compatible installer download in your browser"
+									title="Open the stable installer compatible with this platform"
 								>
 									{openingRepair ? (
 										<LoaderCircle
@@ -474,66 +508,71 @@ export function DeploymentPanel({
 											}
 										/>
 									)}
-									Download
+									Open installer
 								</button>
 							</div>
 							<p className="mt-1.5 text-[10px] leading-4 text-slate-400">
-								The download
-								opens in your
-								browser. Close
-								Mars Command and
-								run the
-								installer
-								yourself; it
-								will not be
-								started
+								Choose{" "}
+								<strong>Open installer</strong>{" "}
+								to start the download in your
+								browser. When it finishes,
+								close Mars Command, open the
+								downloaded installer, and
+								follow its prompts. Then
+								relaunch Mars Command. The
+								installer is never run
 								automatically.
 							</p>
-							{repairOpenError ? (
-								<p
-									role="alert"
-									className="mt-1 text-[10px] text-red-200"
-								>
-									Could
-									not open
-									the
-									download:{" "}
-									{
-										repairOpenError
-									}
-								</p>
-							) : null}
 						</div>
 					) : (
-						<div className="flex items-center justify-between gap-2 text-[10px] text-slate-500">
-							<span className="min-w-0 truncate">
+						<div className="space-y-1.5 text-[10px] text-slate-500">
+							<p>
 								{repairStatus?.message ??
 									`Setup build ${repairStatus?.installedVersion ?? ""} is current.`}
-							</span>
+							</p>
 							{repairStatus?.message ? (
-								<button
-									type="button"
-									className="shrink-0 text-cyan-200 hover:text-cyan-100"
-									onClick={() =>
-										setRepairCheckAttempt(
-											(
-												attempt,
-											) =>
-												attempt +
-												1,
-										)
-									}
-									title="Check GitHub releases again"
-								>
-									<RefreshCw
-										size={
-											12
+								<div className="flex items-center gap-3">
+									<button
+										type="button"
+										className="flex items-center gap-1 text-cyan-200 hover:text-cyan-100"
+										onClick={() =>
+											setRepairCheckAttempt(
+												(attempt) =>
+													attempt +
+													1,
+											)
 										}
-									/>
-								</button>
+										title="Retry the stable release check"
+									>
+										<RefreshCw
+											size={12}
+										/>
+										Retry check
+									</button>
+									<button
+										type="button"
+										className="flex items-center gap-1 text-cyan-200 hover:text-cyan-100"
+										onClick={() =>
+											void openReleasesPage()
+										}
+									>
+										<ExternalLink
+											size={12}
+										/>
+										Open releases page
+									</button>
+								</div>
 							) : null}
 						</div>
 					)}
+					{repairOpenError ? (
+						<p
+							role="alert"
+							className="mt-1.5 text-[10px] leading-4 text-red-200"
+						>
+							{repairOpenError}
+						</p>
+					) : null}
 				</div>
 			</div>
 		</Panel>

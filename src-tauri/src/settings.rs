@@ -41,7 +41,7 @@ pub fn is_minecraft_game_dir(path: &std::path::Path) -> bool {
             .any(|name| path.join(name).is_dir())
 }
 
-fn launcher_minecraft_root() -> Option<PathBuf> {
+pub(crate) fn launcher_minecraft_root() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         return std::env::var_os("APPDATA")
@@ -203,6 +203,37 @@ pub fn mars_launcher_profile_version(game_dir: &std::path::Path) -> Option<Strin
             .then(|| profile["lastVersionId"].as_str().map(str::to_owned))
             .flatten()
     })
+}
+
+pub(crate) fn installed_fml_version(
+    manifest: &crate::manifest::Manifest,
+) -> Result<Option<String>, String> {
+    let Some(root) = launcher_minecraft_root() else {
+        return Ok(None);
+    };
+    let version_id = format!("{}-{}", manifest.loader, manifest.loader_version);
+    if !safe_component(&version_id) {
+        return Err("Unsafe loader version".into());
+    }
+    let path = root
+        .join("versions")
+        .join(&version_id)
+        .join(format!("{version_id}.json"));
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(format!("Could not read installed FML metadata: {err}")),
+    };
+    let metadata: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|err| format!("Invalid installed FML metadata: {err}"))?;
+    Ok(metadata["libraries"].as_array().and_then(|libraries| {
+        libraries.iter().find_map(|library| {
+            library["name"]
+                .as_str()?
+                .strip_prefix("net.neoforged.fancymodloader:loader:")
+                .map(str::to_owned)
+        })
+    }))
 }
 
 fn register_minecraft_profile(

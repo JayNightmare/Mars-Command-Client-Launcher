@@ -1,6 +1,7 @@
 mod integrity;
 pub mod manifest;
 mod minecraft;
+mod personal_mods;
 mod process_detection;
 mod repair;
 mod settings;
@@ -26,6 +27,130 @@ pub fn now_rfc3339() -> String {
 /// reach this state, so every consumer can treat it as trusted.
 #[derive(Default)]
 struct ManifestState(Mutex<Option<Manifest>>);
+
+#[derive(Default)]
+struct InstanceMutation(tokio::sync::Mutex<()>);
+
+fn personal_context(app: &AppHandle, state: &ManifestState) -> Result<(PathBuf, Manifest), String> {
+    let manifest = state
+        .0
+        .lock()
+        .map_err(|_| "Manifest state is unavailable")?
+        .clone()
+        .ok_or("No trusted manifest is loaded")?;
+    let preferences = settings::load(app);
+    let root = PathBuf::from(
+        preferences
+            .instance_root
+            .ok_or("Set up the isolated Mars installation first")?,
+    );
+    let minecraft_root =
+        settings::launcher_minecraft_root().ok_or("Minecraft directory is unavailable")?;
+    let root = personal_mods::isolated_root(&root, &minecraft_root)?;
+    Ok((root, manifest))
+}
+
+fn require_personal_install_ready(
+    root: &std::path::Path,
+    manifest: &Manifest,
+) -> Result<(), String> {
+    if root.file_name().and_then(|name| name.to_str()) != Some(manifest.pack_version.as_str()) {
+        return Err("Update the versioned Mars instance before adding personal mods".into());
+    }
+    if settings::mars_launcher_profile_version(root).as_deref()
+        != Some(format!("{}-{}", manifest.loader, manifest.loader_version).as_str())
+    {
+        return Err(
+            "Update the Mars Launcher installation to the current loader before adding mods".into(),
+        );
+    }
+    Ok(())
+}
+
+fn require_game_closed(root: &std::path::Path) -> Result<(), String> {
+    let root = process_detection::canonical_instance_root(root)?;
+    if process_detection::has_minecraft_client(&root)? {
+        return Err("Close Minecraft for this Mars instance before changing personal mods".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn choose_personal_mod(
+    app: AppHandle,
+    state: State<'_, ManifestState>,
+) -> Result<Option<personal_mods::Preview>, String> {
+    let (root, manifest) = personal_context(&app, &state)?;
+    require_personal_install_ready(&root, &manifest)?;
+    let selected = app
+        .dialog()
+        .file()
+        .set_title("Select a personal NeoForge mod (maximum 64 MiB)")
+        .add_filter("Mod JAR", &["jar"])
+        .blocking_pick_file();
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    let source = selected
+        .into_path()
+        .map_err(|err| format!("Unsupported mod selection: {err}"))?;
+    tauri::async_runtime::spawn_blocking(move || personal_mods::preview(&root, &manifest, &source))
+        .await
+        .map_err(|err| format!("Personal mod validation failed: {err}"))?
+        .map(Some)
+}
+
+#[tauri::command]
+async fn install_personal_mod(
+    app: AppHandle,
+    state: State<'_, ManifestState>,
+    mutation: State<'_, InstanceMutation>,
+    source_path: String,
+    expected_hash: String,
+    expected_root: String,
+    expected_pack_version: String,
+    accept_warnings: bool,
+) -> Result<(), String> {
+    let _guard = mutation.0.lock().await;
+    let (root, manifest) = personal_context(&app, &state)?;
+    if root.to_string_lossy() != expected_root || manifest.pack_version != expected_pack_version {
+        return Err("The instance or signed pack changed; select the mod again".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        require_personal_install_ready(&root, &manifest)?;
+        require_game_closed(&root)?;
+        personal_mods::install(
+            &root,
+            &manifest,
+            &PathBuf::from(source_path),
+            &expected_hash,
+            accept_warnings,
+        )
+    })
+    .await
+    .map_err(|err| format!("Personal mod install failed: {err}"))?
+}
+
+#[tauri::command]
+async fn remove_personal_mod(
+    app: AppHandle,
+    state: State<'_, ManifestState>,
+    mutation: State<'_, InstanceMutation>,
+    file_name: String,
+    expected_root: String,
+) -> Result<(), String> {
+    let _guard = mutation.0.lock().await;
+    let (root, manifest) = personal_context(&app, &state)?;
+    if root.to_string_lossy() != expected_root {
+        return Err("The instance changed; refresh personal mods before removal".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        require_game_closed(&root)?;
+        personal_mods::remove(&root, &manifest, &file_name)
+    })
+    .await
+    .map_err(|err| format!("Personal mod removal failed: {err}"))?
+}
 
 #[tauri::command]
 async fn get_minecraft_status(host: String, port: u16) -> MinecraftServerStatus {
@@ -179,7 +304,9 @@ async fn scan_instance(
 async fn sync_instance(
     app: AppHandle,
     state: State<'_, ManifestState>,
+    mutation: State<'_, InstanceMutation>,
 ) -> Result<sync::SyncResult, String> {
+    let _guard = mutation.0.lock().await;
     let Some(manifest) = state.0.lock().unwrap().clone() else {
         return Ok(sync::SyncResult::failed(
             String::new(),
@@ -195,12 +322,25 @@ async fn sync_instance(
         ));
     };
 
-    Ok(sync::sync_pack(
-        PathBuf::from(root),
-        manifest,
-        preferences.preserve_persistent_data,
-    )
-    .await)
+    let mut root = PathBuf::from(root);
+    if let Some(minecraft_root) = settings::launcher_minecraft_root() {
+        if personal_mods::isolated_root(&root, &minecraft_root).is_ok()
+            && root.file_name().and_then(|name| name.to_str())
+                != Some(manifest.pack_version.as_str())
+        {
+            root = prepare_versioned_instance(&app, &manifest).await?.0;
+        }
+    }
+    if !personal_mods::inventory(&root)?.is_empty() {
+        let minecraft_root =
+            settings::launcher_minecraft_root().ok_or("Minecraft directory is unavailable")?;
+        root = personal_mods::isolated_root(&root, &minecraft_root)?;
+        let check_root = root.clone();
+        tauri::async_runtime::spawn_blocking(move || require_game_closed(&check_root))
+            .await
+            .map_err(|err| format!("Minecraft process check failed: {err}"))??;
+    }
+    Ok(sync::sync_pack(root, manifest, preferences.preserve_persistent_data).await)
 }
 
 fn require_launch_ready(report: &IntegrityReport) -> Result<(), String> {
@@ -219,20 +359,20 @@ fn require_launch_ready(report: &IntegrityReport) -> Result<(), String> {
     if report.mods_foreign > 0 {
         return Err("Unlisted mod JARs are present. Remove them before continuing.".into());
     }
+    if report
+        .personal_mods
+        .iter()
+        .any(|entry| entry.status != "installed")
+    {
+        return Err("Personal mods are missing, changed, or incompatible. Review Personal Mods in Settings.".into());
+    }
     Ok(())
 }
 
-#[tauri::command]
-async fn setup_minecraft_installation(
-    app: AppHandle,
-    state: State<'_, ManifestState>,
-) -> Result<serde_json::Value, String> {
-    let manifest = state
-        .0
-        .lock()
-        .map_err(|_| "Manifest state is unavailable".to_string())?
-        .clone()
-        .ok_or_else(|| "No trusted manifest is loaded".to_string())?;
+async fn prepare_versioned_instance(
+    app: &AppHandle,
+    manifest: &Manifest,
+) -> Result<(PathBuf, bool), String> {
     if !manifest.loader.eq_ignore_ascii_case("neoforge") {
         return Err(format!(
             "Automatic installation setup does not support loader {} yet",
@@ -240,17 +380,51 @@ async fn setup_minecraft_installation(
         ));
     }
 
+    let mut preferences = settings::load(app);
+    let prior_root = preferences.instance_root.as_ref().map(PathBuf::from);
     let root = settings::setup_minecraft_installation(
         &manifest.pack_version,
         &manifest.minecraft_version,
         &manifest.loader,
         &manifest.loader_version,
     )?;
-    let mut preferences = settings::load(&app);
+    let minecraft_root =
+        settings::launcher_minecraft_root().ok_or("Minecraft directory is unavailable")?;
+    let root = personal_mods::isolated_root(&root, &minecraft_root)?;
+    if let Some(source) = prior_root {
+        // Never copy personal files out of arbitrary chosen folders.
+        if !personal_mods::inventory(&source)?.is_empty() {
+            let source = personal_mods::isolated_root(&source, &minecraft_root)?;
+            let target = root.clone();
+            let next_manifest = manifest.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                require_game_closed(&source)?;
+                require_game_closed(&target)?;
+                personal_mods::migrate(&source, &target, &next_manifest)
+            })
+            .await
+            .map_err(|err| format!("Personal mod migration failed: {err}"))??;
+        }
+    }
     preferences.instance_root = Some(root.to_string_lossy().to_string());
-    settings::save(&app, &preferences)?;
-    let preserve_persistent_data = preferences.preserve_persistent_data;
+    settings::save(app, &preferences)?;
+    Ok((root, preferences.preserve_persistent_data))
+}
 
+#[tauri::command]
+async fn setup_minecraft_installation(
+    app: AppHandle,
+    state: State<'_, ManifestState>,
+    mutation: State<'_, InstanceMutation>,
+) -> Result<serde_json::Value, String> {
+    let _guard = mutation.0.lock().await;
+    let manifest = state
+        .0
+        .lock()
+        .map_err(|_| "Manifest state is unavailable")?
+        .clone()
+        .ok_or("No trusted manifest is loaded")?;
+    let (root, preserve_persistent_data) = prepare_versioned_instance(&app, &manifest).await?;
     let sync_result =
         sync::sync_pack(root.clone(), manifest.clone(), preserve_persistent_data).await;
     let root_text = root.to_string_lossy().to_string();
@@ -324,6 +498,9 @@ async fn get_mars_installation_action(
         settings::save(&app, &preferences)?;
     }
     let preserve_persistent_data = preferences.preserve_persistent_data;
+    if root.file_name().and_then(|name| name.to_str()) != Some(manifest.pack_version.as_str()) {
+        return Ok("update".into());
+    }
     let expected_loader_version = format!("{}-{}", manifest.loader, manifest.loader_version);
     if settings::mars_launcher_profile_version(&root).as_deref()
         != Some(expected_loader_version.as_str())
@@ -356,7 +533,9 @@ async fn get_mars_installation_action(
 async fn launch_minecraft_installation(
     app: AppHandle,
     state: State<'_, ManifestState>,
+    mutation: State<'_, InstanceMutation>,
 ) -> Result<(), String> {
+    let _guard = mutation.0.lock().await;
     let manifest = state
         .0
         .lock()
@@ -369,6 +548,9 @@ async fn launch_minecraft_installation(
         .map(PathBuf::from)
         .ok_or_else(|| "Set up the Mars installation before launching".to_string())?;
     let preserve_persistent_data = preferences.preserve_persistent_data;
+    if root.file_name().and_then(|name| name.to_str()) != Some(manifest.pack_version.as_str()) {
+        return Err("The pack version changed. Update the versioned Mars instance first.".into());
+    }
     let expected_loader_version = format!("{}-{}", manifest.loader, manifest.loader_version);
     if settings::mars_launcher_profile_version(&root).as_deref()
         != Some(expected_loader_version.as_str())
@@ -467,6 +649,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(ManifestState::default())
+        .manage(InstanceMutation::default())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 apply_window_effects(&window);
@@ -488,7 +671,10 @@ pub fn run() {
             setup_minecraft_installation,
             get_mars_installation_action,
             launch_minecraft_installation,
-            wait_for_minecraft_client
+            wait_for_minecraft_client,
+            choose_personal_mod,
+            install_personal_mod,
+            remove_personal_mod
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -515,9 +701,21 @@ mod launch_tests {
             mods_present: 1,
             mods_foreign: 0,
             mods_fully_verified: true,
+            personal_mods: Vec::new(),
             drift: Vec::new(),
             error: None,
         }
+    }
+
+    #[test]
+    fn personal_install_rejects_an_old_pack_directory_before_loader_checks() {
+        let manifest = crate::personal_mods::tests::manifest("2.0.0");
+        let error = super::require_personal_install_ready(
+            &std::path::PathBuf::from("mars-client").join("1.0.0"),
+            &manifest,
+        )
+        .unwrap_err();
+        assert!(error.contains("versioned Mars instance"));
     }
 
     #[test]
@@ -530,6 +728,23 @@ mod launch_tests {
 
         let mut report = clean_report();
         report.mods_foreign = 1;
+        assert!(require_launch_ready(&report).is_err());
+
+        let mut report = clean_report();
+        report.personal_mods.push(crate::personal_mods::ModStatus {
+            file: crate::personal_mods::PersonalMod {
+                file_name: "personal.jar".into(),
+                sha256: "a".repeat(64),
+                size: 100,
+                mod_ids: vec!["personal".into()],
+            },
+            status: "installed".into(),
+            message: None,
+        });
+        assert!(require_launch_ready(&report).is_ok());
+        report.personal_mods[0].status = "changed".into();
+        assert!(require_launch_ready(&report).is_err());
+        report.personal_mods[0].status = "incompatible".into();
         assert!(require_launch_ready(&report).is_err());
     }
 }
