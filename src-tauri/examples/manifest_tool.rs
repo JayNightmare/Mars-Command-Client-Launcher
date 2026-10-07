@@ -119,7 +119,7 @@ fn cf_pack(
         collect_hashed(&overrides_root, dir, &mut files)?;
     }
     let override_base = std::env::var("MARS_OVERRIDE_BASE_URL").unwrap_or_else(|_| {
-        "https://raw.githubusercontent.com/JayNightmare/Mars-Command-Client-Launcher/main/modpack/Mars%20Client/overrides".to_string()
+        "https://raw.githubusercontent.com/Mars-Command/Client-Launcher/main/modpack/Mars%20Client/overrides".to_string()
     });
     for file in &mut files {
         let path = file["path"]

@@ -26,7 +26,7 @@ import type { PackIntegrityState } from "../hooks/usePackIntegrity";
 
 const PROJECT_URL = "https://mars.nexusgit.info/";
 const REPOSITORY_URL =
-	"https://github.com/JayNightmare/Mars-Command-Client-Launcher";
+	"https://github.com/Mars-Command/Client-Launcher";
 const ISSUES_URL = `${REPOSITORY_URL}/issues/new`;
 const SPONSORS_URL = "https://github.com/sponsors/JayNightmare";
 

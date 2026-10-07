@@ -28,7 +28,7 @@ type InstallationRepairStatus = {
 };
 
 const RELEASES_PAGE_URL =
-	"https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases";
+	"https://github.com/Mars-Command/Client-Launcher/releases";
 
 const VERDICT_LABEL: Record<FileVerdict, string> = {
 	ok: "Verified",

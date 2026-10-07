@@ -1,5 +1,13 @@
 # Roadmap
 
+## Repositories
+
+All project repositories live in the [Mars-Command](https://github.com/Mars-Command) organisation:
+
+- [Client-Launcher](https://github.com/Mars-Command/Client-Launcher): this desktop launcher (Milestones 1, 3, 5 and client-side parts of 2).
+- [Server-Backend](https://github.com/Mars-Command/Server-Backend): API for mod storage, submissions, moderation, and roles (Milestones 2 and 4).
+- [Website](https://github.com/Mars-Command/Website): public site, including any community or donation pages (Milestones 3 and 4).
+
 ## Milestone 1: Personal client mods
 
 - [x] Add a mod selection/upload flow for a user's isolated Mars installation.

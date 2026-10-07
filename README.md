@@ -70,7 +70,7 @@ The **Build client installers** workflow runs when a `client-vX.Y.Z` tag is push
 
 The in-app client update check uses stable, non-prerelease GitHub releases and selects the newest installer compatible with the current platform: `setup-X.Y.Z.exe` on Windows or `setup-X.Y.Z.deb` on Linux. For older releases it also accepts `setup.exe` or `setup.deb` when the release tag contains a valid version; a versioned asset is preferred when both names are published. Drafts, prereleases, unsupported platforms, and assets for another platform are not offered.
 
-When an update is available, choose **Open installer** to open its download in your browser. After it finishes, close Mars Command, open the downloaded installer, follow its prompts, and relaunch Mars Command. No installer runs or installs silently. If the release check cannot reach GitHub, retry after checking your connection or open the [GitHub releases page](https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases). If no compatible stable asset is published, check that page for `setup-X.Y.Z.exe` or `setup-X.Y.Z.deb` (or the legacy generic name), then retry the check later.
+When an update is available, choose **Open installer** to open its download in your browser. After it finishes, close Mars Command, open the downloaded installer, follow its prompts, and relaunch Mars Command. No installer runs or installs silently. If the release check cannot reach GitHub, retry after checking your connection or open the [GitHub releases page](https://github.com/Mars-Command/Client-Launcher/releases). If no compatible stable asset is published, check that page for `setup-X.Y.Z.exe` or `setup-X.Y.Z.deb` (or the legacy generic name), then retry the check later.
 
 ## Release API
 
@@ -176,9 +176,6 @@ src-tauri/src/
   lib.rs                     Tauri commands and Setup/Update/Launch status
 src-tauri/examples/
   manifest_tool.rs           Maintainer manifest generator and signer
-Mars-Server-API/
-  main.py                    Manifest and package-file API
-  openapi.json               API contract
 manifest-dist/               Release manifest and detached signature
 ```
 

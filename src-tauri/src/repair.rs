@@ -2,10 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const RELEASES_URL: &str =
-    "https://api.github.com/repos/JayNightmare/Mars-Command-Client-Launcher/releases?per_page=100";
+    "https://api.github.com/repos/Mars-Command/Client-Launcher/releases?per_page=100";
 const INSTALLED_VERSION: &str = env!("CARGO_PKG_VERSION");
-const RELEASE_PAGE_URL: &str =
-    "https://github.com/JayNightmare/Mars-Command-Client-Launcher/releases";
+const RELEASE_PAGE_URL: &str = "https://github.com/Mars-Command/Client-Launcher/releases";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct SetupVersion(u64, u64, u64);
