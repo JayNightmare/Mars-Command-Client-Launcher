@@ -64,10 +64,25 @@ jobs:
                     import fs from "node:fs";
                     const version = process.env.VERSION;
                     const packageVersion = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+                    const packageLock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+                    const packageLockVersion = packageLock.version;
+                    const packageLockRootVersion = packageLock.packages?.[""]?.version;
                     const tauriVersion = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8")).version;
-                    const cargoVersion = fs.readFileSync("src-tauri/Cargo.toml", "utf8").match(/^version = "([^"]+)"$/m)?.[1];
-                    if ([packageVersion, tauriVersion, cargoVersion].some(value => value !== version)) {
-                      throw new Error(`Tag ${version} must match package (${packageVersion}), Tauri (${tauriVersion}), and Cargo (${cargoVersion}) versions.`);
+                    const cargoManifest = fs.readFileSync("src-tauri/Cargo.toml", "utf8");
+                    const cargoLock = fs.readFileSync("src-tauri/Cargo.lock", "utf8");
+                    const cargoVersion = cargoManifest.match(/^version = "([^"]+)"$/m)?.[1];
+                    const cargoLockVersion = cargoLock.match(/\[\[package\]\]\r?\nname = "mars-command-client"\r?\nversion = "([^"]+)"/)?.[1];
+                    const surfaces = {
+                      packageVersion,
+                      packageLockVersion,
+                      packageLockRootVersion,
+                      tauriVersion,
+                      cargoVersion,
+                      cargoLockVersion,
+                    };
+                    const mismatches = Object.entries(surfaces).filter(([, value]) => value !== version);
+                    if (mismatches.length) {
+                      throw new Error(`Tag ${version} does not match release version surfaces: ${JSON.stringify(surfaces)}`);
                     }
                   '
 

@@ -64,7 +64,7 @@ After setting up the current Mars installation, open **Settings -> Personal Mods
 
 Personal mod management requires a trusted signed manifest. Remote storage, submission, and community browsing are not part of this local flow.
 
-### Website accounts and community metadata (batch 1)
+### Website accounts and community metadata (Batch 2 release candidate)
 
 The title-bar account icon opens account controls. **Sign in on website** starts a desktop device request through the Rust backend and opens the configured website using the existing Tauri opener. GitHub OAuth and explicit desktop identity approval happen on the website. The backend polls the approved device request; no desktop callback protocol is registered or invented. Expiry, denial, cancellation, browser failures, malformed replies, and network/configuration failures are surfaced. Cancelling or signing out clears desktop secrets and ignores late approvals.
 
@@ -88,7 +88,7 @@ Focused validation: `node --test src/lib/communityValidation.test.mjs`, `npm.cmd
 
 - Staging consumes a supplied byte stream, at most **64 MiB plus one overflow-detection byte**, into a temporary directory inside `.minecraft/mars-client/<pack-version>/.mars-command/community-capsules`. Failed/partial streams, wrong checksums, malformed archives and incompatible mods never become active. Nothing is extracted from an archive.
 - Compatibility uses the existing bounded NeoForge metadata/dependency/conflict validator and an explicitly supplied installed FML version. Unlike manual Personal Mods, capsules fail closed on missing Minecraft/NeoForge constraints, unresolved ranges, and bundled Jar-in-Jar modules. Metadata cannot prove safety, client-only behavior, or server acceptance.
-- A verified directory binds release identity separately from content checksum. At most **four retained versions** are allowed (including abandoned staging directories); a full store fails without deleting older bytes. Normal failure cleans temporary staging. Interrupted mutation locks fail closed and require manual inspection/recovery; automatic garbage collection is not implemented.
+- A verified directory binds release identity separately from content checksum. At most **four retained versions** are allowed (including abandoned staging directories); a full store fails without deleting older bytes. Normal failure cleans temporary staging. Mutation serialization uses an OS-backed exclusive lock, so a process exit releases the lock and the next operation can safely reuse the persistent lock marker. Automatic garbage collection of abandoned staging directories is not implemented.
 - Activation rechecks bytes and compatibility, then atomically replaces one local activation record on the same filesystem. Prior verified versions remain intact. Explicit rollback rechecks the previous release and can recover even if the current artifact is damaged. A failed pre-commit operation preserves the previous activation record. This is atomic visibility, not a guarantee against power-loss/filesystem failure or hostile concurrent local filesystem edits.
 - The active-artifact accessor rechecks integrity and compatibility every time; staged-only artifacts are never returned. It is a future isolated-launch overlay input, **not integrated into Minecraft Launcher yet**. Signed pack files, the instance's existing `mods`, personal inventory and shared `.minecraft/mods` are never modified. There is no Tauri command, remote-install button or production HTTP download path.
 
@@ -98,7 +98,9 @@ Focused check (from `src-tauri`): `cargo test community_capsules::tests --lib`. 
 
 ## Client Releases
 
-The **Build client installers** workflow runs when a `client-vX.Y.Z` tag is pushed. Before tagging, set the same `X.Y.Z` version in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`. The workflow validates those versions, builds a Windows NSIS installer and Linux Debian package, then publishes them as `setup-X.Y.Z.exe` and `setup-X.Y.Z.deb` assets on the GitHub release. Building the tagged release publishes it; do not push a tag until both installers are intended for release.
+The **Build client installers** workflow runs when a `client-vX.Y.Z` tag is pushed. Before tagging, set the same `X.Y.Z` version in `package.json`, both root entries in `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the `mars-command-client` package entry in `src-tauri/Cargo.lock`. The workflow validates all of those surfaces, builds a Windows NSIS installer and Linux Debian package, then publishes them as `setup-X.Y.Z.exe` and `setup-X.Y.Z.deb` assets on the GitHub release. Building the tagged release publishes it; do not push a tag until both installers are intended for release.
+
+Batch 2 client release candidate **1.3.0** hardens the existing session-only GitHub desktop authorization flow, private profile metadata proxy/UX, configured Sponsors navigation, and local capsule staging/activation/rollback boundary. It does not add live capsule upload, download, scanning, publication, backend capsule endpoints, or cryptographic capsule signing.
 
 The in-app client update check uses stable, non-prerelease GitHub releases and selects the newest installer compatible with the current platform: `setup-X.Y.Z.exe` on Windows or `setup-X.Y.Z.deb` on Linux. For older releases it also accepts `setup.exe` or `setup.deb` when the release tag contains a valid version; a versioned asset is preferred when both names are published. Drafts, prereleases, unsupported platforms, and assets for another platform are not offered.
 

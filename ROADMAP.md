@@ -183,3 +183,28 @@ verification/role synchronization remain pending. Public search/copy tests use
 seeded fixtures because there is intentionally no production publication path yet.
 Temporary integration servers and fixture files were removed. All batch changes
 remain uncommitted and unpushed.
+
+## Batch 2 release-candidate acceptance
+
+Batch 2 hardens and versions the existing foundations without enabling live
+capsule upload, scanning, publication, or download. It does not complete any
+unfinished Milestone 2, 3, or 4 outcome.
+
+- [x] Prepare client **1.3.0** with synchronized npm, Cargo, Tauri, and lockfile versions plus tag/version enforcement.
+- [x] Prepare website **0.1.0** with synchronized package/lock versions, release checks, and test/lint/audit deployment gates.
+- [x] Prepare backend **0.2.0** with one authoritative version source and synchronized runtime/checked-in OpenAPI metadata.
+- [x] Review [Batch 2 client report](../doc/reports/sub_report-batch2-client.md) and independently verify **6 frontend tests**, production build, formatting, and **70 Rust library tests**.
+- [x] Review [Batch 2 website report](../doc/reports/sub_report-batch2-website.md) and independently verify **49 tests**, lint, production build, version checks, and a clean production dependency audit.
+- [x] Review [Batch 2 backend report](../doc/reports/sub_report-batch2-backend.md) and independently verify **72 tests**, compile validation, OpenAPI/version consistency, and whitespace checks.
+- [x] Build local Windows MSI and NSIS client installers through the release-mode Tauri build; no artifact was tagged or published.
+- [x] Smoke-test the final website/backend candidates with isolated temporary data: health, anonymous session, exact credentialed CORS, OAuth redirect initiation, desktop pending handoff, and root/account/login routes.
+- [x] Align the website's launcher display default/example with client **1.3.0** while keeping the website package independently versioned at **0.1.0**.
+
+Remaining release gates are live GitHub OAuth completion, native packaged-client
+approval/polling, production origin/cookie/proxy configuration, persistent backend
+storage and backup/restore operations, Linux CI packaging, GitHub Pages repository
+variables, final operator approval, commits, tags, deployment, and publication.
+The website's disclosed development-only `source-map-js` advisory remains; its
+production dependency audit is clean. The backend retains one existing Starlette
+TestClient deprecation warning. All Batch 2 source changes remain uncommitted and
+unpushed.

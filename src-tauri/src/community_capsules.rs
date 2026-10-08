@@ -8,7 +8,10 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::{Builder, NamedTempFile};
@@ -76,20 +79,35 @@ pub struct CapsuleStore {
 }
 
 struct Lock {
-    path: PathBuf,
-    file: Option<File>,
+    file: File,
 }
 
 impl Drop for Lock {
     fn drop(&mut self) {
-        // Close before removing on Windows.
-        drop(self.file.take());
-        let _ = fs::remove_file(&self.path);
+        let _ = FileExt::unlock(&self.file);
     }
 }
 
 fn io_error(err: impl std::fmt::Display) -> String {
     format!("Community capsule storage: {err}")
+}
+
+fn publish_staged_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let mut delay = Duration::from_millis(10);
+    for attempt in 0..6 {
+        match fs::rename(source, destination) {
+            Err(err)
+                if cfg!(windows)
+                    && err.kind() == std::io::ErrorKind::PermissionDenied
+                    && attempt < 5 =>
+            {
+                thread::sleep(delay);
+                delay *= 2;
+            }
+            result => return result,
+        }
+    }
+    unreachable!()
 }
 
 fn read_record<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
@@ -147,17 +165,18 @@ impl CapsuleStore {
 
     fn lock(&self, directory: &Path) -> Result<Lock, String> {
         let path = directory.join("mutation.lock");
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
+            .read(true)
             .write(true)
-            .create_new(true)
+            .create(true)
             .open(&path)
-            .map_err(|_| {
-                "Capsule storage is busy or has an interrupted mutation lock".to_string()
-            })?;
-        Ok(Lock {
-            path,
-            file: Some(file),
-        })
+            .map_err(io_error)?;
+        file.try_lock_exclusive()
+            .map_err(|_| "Capsule storage is busy with another operation".to_string())?;
+        file.set_len(0).map_err(io_error)?;
+        write!(file, "{}", std::process::id()).map_err(io_error)?;
+        file.sync_all().map_err(io_error)?;
+        Ok(Lock { file })
     }
 
     fn state(&self, directory: &Path) -> Result<Activation, String> {
@@ -283,7 +302,7 @@ impl CapsuleStore {
             .map_err(io_error)?;
         record.sync_all().map_err(io_error)?;
         drop(record);
-        fs::rename(staged.path(), &destination).map_err(|err| {
+        publish_staged_directory(staged.path(), &destination).map_err(|err| {
             format!(
                 "Could not publish staged capsule {}: {err}",
                 release.release_id
@@ -532,6 +551,8 @@ mod tests {
         assert_eq!(
             fs::read_dir(fixture.store.root.join(STORE))
                 .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name() != "mutation.lock")
                 .count(),
             0
         );
@@ -567,6 +588,8 @@ mod tests {
         assert_eq!(
             fs::read_dir(fixture.store.root.join(STORE))
                 .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name() != "mutation.lock")
                 .count(),
             2
         );
@@ -778,6 +801,17 @@ mod tests {
             .is_err());
         assert_eq!(fixture.activation_bytes(), before);
         fixture.activate(&first);
+    }
+
+    #[test]
+    fn an_abandoned_lock_file_is_recovered_but_a_live_lock_remains_exclusive() {
+        let fixture = Fixture::new();
+        let directory = fixture.store.directory(&fixture.manifest).unwrap();
+        fs::write(directory.join("mutation.lock"), b"stale-process").unwrap();
+        let recovered = fixture.store.lock(&directory).unwrap();
+        assert!(fixture.store.lock(&directory).is_err());
+        drop(recovered);
+        fixture.stage(&fixture.release("after-restart"));
     }
 
     #[test]

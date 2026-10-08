@@ -262,6 +262,8 @@ async fn start_login(
             .map_err(|_| "Account state unavailable.")?;
         session.generation += 1;
         session.pending = None;
+        session.token = None;
+        session.user = None;
         session.generation
     };
     let response: DeviceResponse = json_response(
@@ -441,16 +443,33 @@ pub fn desktop_sponsors_url(state: State<'_, CommunityState>) -> Result<String, 
     {
         return Err("Sign in through the website before opening Sponsors.".into());
     }
-    let url = configured_url(
+    sponsors_url(
         std::env::var("MARS_SPONSORS_URL")
             .ok()
             .or_else(|| option_env!("MARS_SPONSORS_URL").map(str::to_string)),
-        "MARS_SPONSORS_URL",
-    )?;
+    )
+}
+
+fn sponsors_url(value: Option<String>) -> Result<String, String> {
+    let url = configured_url(value, "MARS_SPONSORS_URL")?;
+    let segments = url
+        .path_segments()
+        .map(|segments| {
+            segments
+                .filter(|segment| !segment.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     if url.scheme() != "https"
         || url.host_str() != Some("github.com")
-        || !url.path().starts_with("/sponsors/")
-        || url.path().trim_end_matches('/') == "/sponsors"
+        || segments.len() != 2
+        || segments[0] != "sponsors"
+        || segments[1].is_empty()
+        || segments[1].starts_with('-')
+        || segments[1].ends_with('-')
+        || !segments[1]
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     {
         return Err("Configure an explicit https://github.com/sponsors/<recipient> URL.".into());
     }
@@ -830,6 +849,19 @@ mod tests {
             endpoint(&base, "api/auth/desktop").unwrap().as_str(),
             "http://127.0.0.1:8000/service/api/auth/desktop"
         );
+        assert_eq!(
+            sponsors_url(Some("https://github.com/sponsors/mars-command".into())).unwrap(),
+            "https://github.com/sponsors/mars-command/"
+        );
+        for url in [
+            "https://github.com/sponsors/",
+            "https://github.com/sponsors/mars-command/extra",
+            "https://github.com/not-sponsors/mars-command",
+            "https://example.com/sponsors/mars-command",
+            "http://github.com/sponsors/mars-command",
+        ] {
+            assert!(sponsors_url(Some(url.into())).is_err());
+        }
     }
 
     #[test]
@@ -914,6 +946,40 @@ mod tests {
             clear_session(&state).unwrap();
             assert!(state.session.lock().unwrap().token.is_none());
             assert!(state.session.lock().unwrap().user.is_none());
+        });
+    }
+
+    #[test]
+    fn starting_a_new_login_clears_the_previous_identity_before_transport() {
+        runtime().block_on(async {
+            let state = CommunityState::default();
+            {
+                let mut session = state.session.lock().unwrap();
+                session.token = Some("old-session".into());
+                session.user = Some(User {
+                    id: "old-user".into(),
+                    username: "old".into(),
+                    avatar_url: String::new(),
+                    roles: vec![],
+                });
+            }
+            let (api, server) = mock_api(
+                vec![(500, serde_json::json!({"detail": "unavailable"}))],
+                |_| {},
+            );
+            assert!(start_login(
+                &state,
+                &api,
+                &Url::parse("https://website.example/").unwrap()
+            )
+            .await
+            .is_err());
+            let session = state.session.lock().unwrap();
+            assert!(session.token.is_none());
+            assert!(session.user.is_none());
+            assert!(session.pending.is_none());
+            drop(session);
+            server.join().unwrap();
         });
     }
 
