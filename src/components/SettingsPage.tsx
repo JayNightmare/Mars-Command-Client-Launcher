@@ -28,18 +28,21 @@ const PROJECT_URL = "https://mars.nexusgit.info/";
 const REPOSITORY_URL =
 	"https://github.com/Mars-Command/Client-Launcher";
 const ISSUES_URL = `${REPOSITORY_URL}/issues/new`;
-const SPONSORS_URL = "https://github.com/sponsors/JayNightmare";
 
 type Props = {
 	pack: PackIntegrityState;
 	refreshingTelemetry: boolean;
 	refreshTelemetry: () => void;
+	onDonate: () => void;
+	donationPending: boolean;
 };
 
 export function SettingsPage({
 	pack,
 	refreshingTelemetry,
 	refreshTelemetry,
+	onDonate,
+	donationPending,
 }: Props) {
 	const [preferences, setPreferences] = useState(getClientPreferences);
 	const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -498,15 +501,8 @@ export function SettingsPage({
 						</button>
 						<button
 							type="button"
-							onClick={() =>
-								runQuickAction(
-									"GitHub Sponsors",
-									() =>
-										openUrl(
-											SPONSORS_URL,
-										),
-								)
-							}
+							onClick={onDonate}
+							disabled={donationPending}
 							className="flex items-center gap-2 rounded-lg border border-emerald-300/15 bg-emerald-300/5 px-3 py-2.5 text-left text-[11px] text-emerald-100 transition hover:bg-emerald-300/10"
 						>
 							<Heart size={14} />
@@ -521,10 +517,9 @@ export function SettingsPage({
 						</button>
 					</div>
 					<p className="mt-2 text-[10px] leading-4 text-slate-500">
-						GitHub handles sponsorships on
-						the maintainer's page; Mars
-						Command does not collect
-						payments.
+						Sign in on the configured website first, then open the configured
+						GitHub Sponsors recipient. Mars Command does not collect payments
+						or grant account roles.
 					</p>
 					{actionMessage ? (
 						<p

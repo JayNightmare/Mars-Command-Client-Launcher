@@ -1,3 +1,4 @@
+mod community;
 mod integrity;
 pub mod manifest;
 mod minecraft;
@@ -650,6 +651,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(ManifestState::default())
         .manage(InstanceMutation::default())
+        .manage(community::CommunityState::default())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 apply_window_effects(&window);
@@ -657,6 +659,16 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            community::desktop_login_start,
+            community::desktop_login_poll,
+            community::desktop_logout,
+            community::desktop_account,
+            community::desktop_sponsors_url,
+            community::community_profiles,
+            community::community_create,
+            community::community_update,
+            community::community_delete,
+            community::community_submit,
             get_minecraft_status,
             check_installation_repair,
             refresh_manifest,

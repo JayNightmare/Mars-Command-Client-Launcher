@@ -47,7 +47,7 @@ The dashboard remembers the installation and offers:
 
 Launch rechecks integrity but does not rewrite the profile or sync again. Minecraft Launcher handles Microsoft sign-in; select the Mars profile and click **Play** there. When enabled in Settings, Mars Command waits up to two minutes for the Java process using the configured Mars game directory, then closes itself. It does not directly start the game process.
 
-Settings also provides reduced-motion and larger-text accessibility options, plus quick actions to open the installation folder, report a bug, and visit the project links. **Fund This Project** opens GitHub Sponsors; payments are handled by GitHub, not Mars Command.
+Settings also provides reduced-motion and larger-text accessibility options, plus quick actions to open the installation folder, report a bug, and visit the project links. **Fund This Project** initiates website GitHub sign-in when signed out; when signed in it opens the explicitly configured GitHub Sponsors recipient. Payments are handled by GitHub, not Mars Command; this button never grants roles.
 
 World-specific data packs are not placed into a save automatically; they remain manual until a world target is selected.
 
@@ -63,6 +63,24 @@ After setting up the current Mars installation, open **Settings -> Personal Mods
 - Integrity results distinguish **installed (local checksum matches, unsigned)**, **missing**, **changed**, **unreadable**, and **incompatible** personal mods. Unknown/untracked JARs still remain foreign and block launch. A damaged inventory fails closed. Removal never deletes untracked/signed pack files or a personal JAR whose bytes changed; inspect that file manually, and then remove its missing inventory entry in Settings if appropriate.
 
 Personal mod management requires a trusted signed manifest. Remote storage, submission, and community browsing are not part of this local flow.
+
+### Website accounts and community metadata (batch 1)
+
+The title-bar account icon opens account controls. **Sign in on website** starts a desktop device request through the Rust backend and opens the configured website using the existing Tauri opener. GitHub OAuth and explicit desktop identity approval happen on the website. The backend polls the approved device request; no desktop callback protocol is registered or invented. Expiry, denial, cancellation, browser failures, malformed replies, and network/configuration failures are surfaced. Cancelling or signing out clears desktop secrets and ignores late approvals.
+
+The access token and secret device code stay in Rust process memory, never localStorage, plaintext config, browser URLs, logs, or frontend IPC responses. **Persistent login is not implemented**: restart requires sign-in. The server owns token expiry; authenticated HTTP 401 responses clear the desktop session and prompt sign-in. The website's session is independent. Pack authentication is unchanged.
+
+The reachable **Community** tab browses/searches public profile names/descriptions case-insensitively (server-side) without sign-in. Signed-in users can create private drafts, edit/delete their private profiles, copy public metadata into independent personal profiles, and explicitly submit non-empty drafts. Backend ownership/visibility/role enforcement remains authoritative. Mod entries are only metadata: copying/saving never installs JARs, certifies checksums, or pretends a malware scan completed. Submission in this batch is expected to fail closed with HTTP 409 `scanning_not_configured`. Real verified community file download/install and scanning/upload contracts remain outside batch 1; existing local Personal Mods remains available.
+
+Set public deployment variables in the **Rust build environment** (compiled into installers), or export them in the desktop process environment during development. `.env.example` documents their names; account commands do not automatically load `.env`.
+
+- `MARS_COMMUNITY_API_BASE`: explicit server origin/base **without `/api`**. The backend appends `api/auth/desktop`, `api/auth/desktop/poll`, and `api/community/profiles` (plus `/mine`, `/{id}`, `/{id}/submit`). No live API origin is assumed. HTTPS is required except local loopback HTTP.
+- `MARS_WEBSITE_BASE`: explicit website origin/base. The returned verification URI must be same-origin, target `<base>/auth/login`, and contain only the matching `requestId` query parameter, never the secret device code. Website OAuth callback may retain `requestId` with `authResult=success` or `authResult=error` and a safe enumerated `errorCode`; callbacks belong to the website, not this client.
+- `MARS_SPONSORS_URL`: explicit `https://github.com/sponsors/<recipient>`; no recipient is assumed. Missing/invalid configuration is an error, not a silent fallback.
+
+Desktop community calls use the returned Bearer token, independently of existing signed-pack requests. Profile PATCH is partial and rejects null name/description/mods. Network/configuration errors are not displayed as empty profile lists.
+
+Focused validation: `node --test src/lib/communityValidation.test.mjs`, `npm.cmd run build`, and from `src-tauri`, `cargo fmt --check` and `cargo test community::tests --lib`. Live OAuth, website approval, API deployment/configuration, Sponsors eligibility, and antivirus scanning require the corresponding deployed services and are not certified by these local checks.
 
 ## Client Releases
 

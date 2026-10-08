@@ -1,14 +1,20 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Radio, Settings2, Square, X } from "lucide-react";
+import { Minus, Radio, Settings2, Square, UserRound, X } from "lucide-react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { useCallback } from "react";
 
 export function TitleBar({
 	settingsOpen,
 	onToggleSettings,
+	accountName,
+	accountPending,
+	onToggleAccount,
 }: {
 	settingsOpen: boolean;
 	onToggleSettings: () => void;
+	accountName?: string;
+	accountPending: boolean;
+	onToggleAccount: () => void;
 }) {
 	// `data-tauri-drag-region` only matches the exact event target, so child
 	// nodes would swallow the drag. Start it explicitly instead.
@@ -48,6 +54,12 @@ export function TitleBar({
 			</div>
 
 			<div className="flex h-full items-center gap-1 pt-2 mb-2 pr-1">
+				<button type="button" aria-label={accountName ? `Account: ${accountName}` : "Open website account login"}
+					title={accountName ? `Signed in: ${accountName}` : accountPending ? "Awaiting website approval" : "Sign in with GitHub"}
+					onClick={onToggleAccount}
+					className={`grid h-full w-10 place-items-center rounded-lg hover:bg-white/8 ${accountName ? "text-cyan-200" : "text-slate-400"}`}>
+					<UserRound size={15} />
+				</button>
 				<button
 					type="button"
 					aria-label={

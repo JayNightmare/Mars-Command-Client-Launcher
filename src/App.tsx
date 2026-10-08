@@ -11,6 +11,9 @@ import { Panel } from "./components/Panel";
 import { ServerStatusPanel } from "./components/ServerStatusPanel";
 import { SettingsPage } from "./components/SettingsPage";
 import { TitleBar } from "./components/TitleBar";
+import { AccountPanel } from "./components/AccountPanel";
+import { CommunityPage } from "./components/CommunityPage";
+import { useCommunityAccount } from "./hooks/useCommunityAccount";
 import { useMissionControlConfig } from "./hooks/useMissionControlConfig";
 import { useMarsServerStatus } from "./hooks/useMarsServerStatus";
 import { usePackIntegrity } from "./hooks/usePackIntegrity";
@@ -67,6 +70,9 @@ function App() {
 
 	const pack = usePackIntegrity();
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [communityOpen, setCommunityOpen] = useState(false);
+	const [accountOpen, setAccountOpen] = useState(false);
+	const account = useCommunityAccount();
 
 	const transmissions = useMemo<Transmission[]>(() => {
 		const motd = normalizeMotd(status?.motd);
@@ -91,18 +97,33 @@ function App() {
 		<main className="h-screen overflow-hidden bg-[radial-gradient(circle_at_18%_0%,rgba(167,41,41,0.25),transparent_35%),radial-gradient(circle_at_88%_92%,rgba(30,112,133,0.17),transparent_36%),rgba(5,8,12,0.56)]">
 			<div className="mx-auto flex h-full max-w-[1400px] flex-col overflow-hidden border border-white/12 bg-slate-950/30 shadow-2xl shadow-black/40 backdrop-blur-xl">
 				<TitleBar
+					accountName={account.user?.username}
+					accountPending={account.pending}
+					onToggleAccount={() => {
+						setAccountOpen((open) => !open);
+						if (!accountOpen && !account.user && !account.pending) void account.login();
+					}}
 					settingsOpen={settingsOpen}
 					onToggleSettings={() =>
 						setSettingsOpen((open) => !open)
 					}
 				/>
 
+				<nav aria-label="Client sections" className="flex shrink-0 gap-2 border-b border-white/8 px-3 py-2 text-xs">
+					<button type="button" aria-pressed={!communityOpen && !settingsOpen} onClick={() => { setCommunityOpen(false); setSettingsOpen(false); }} className="rounded-lg px-3 py-1 text-slate-300 hover:bg-white/10">Mission control</button>
+					<button type="button" aria-pressed={communityOpen && !settingsOpen} onClick={() => { setCommunityOpen(true); setSettingsOpen(false); }} className="rounded-lg px-3 py-1 text-cyan-200 hover:bg-white/10">Community</button>
+				</nav>
+				{accountOpen && (!communityOpen || settingsOpen) ? <div className="shrink-0 px-3 pt-3"><AccountPanel account={account} /></div> : null}
 				{settingsOpen ? (
 					<SettingsPage
+						onDonate={() => { setAccountOpen(true); void account.donate(); }}
+						donationPending={account.pending}
 						pack={pack}
 						refreshingTelemetry={refreshing}
 						refreshTelemetry={refresh}
 					/>
+				) : communityOpen ? (
+					<CommunityPage account={account} />
 				) : (
 					<div className="grid min-h-0 flex-1 grid-cols-12 gap-3 p-3">
 						{/* Left rail */}
