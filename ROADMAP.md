@@ -24,6 +24,7 @@ All project repositories live in the [Mars-Command](https://github.com/Mars-Comm
   - [ ] Verify live GitHub OAuth, production cookie/redirect configuration, and the native packaged launcher.
   - [ ] Automatically return/focus the open launcher after website approval.
 - [ ] Add authenticated mod submission to remote storage with metadata for author, version, game/loader compatibility, source, and license.
+- [ ] Represent each uploaded mod version as an immutable release capsule: bind its exact artifact checksum to immutable release metadata and references to versioned provenance, compatibility, and scan attestations; keep release identity and ownership separate if identical bytes are deduplicated.
 - [ ] Store uploaded files in a private server-managed bucket; isolate unvalidated files from downloadable files.
 - [ ] Add queued upload processing with temporary edge staging, bounded storage, expiry, and visible pending/failure states.
 - [ ] Validate submissions before publishing; retain checksums and version history so downloads can be verified.
@@ -39,6 +40,16 @@ All project repositories live in the [Mars-Command](https://github.com/Mars-Comm
 - [ ] Persist report/takedown incident metadata and deliver create/update/delete events to Discord with retryable webhook delivery.
 - [ ] Keep community files separate from the signed base-pack manifest and provide clear upload limits and failure messages.
 
+### Capsule publication pipeline
+
+- [ ] Define the capsule schema, immutable release identity, and owner-scoped references to deduplicated artifacts.
+- [ ] Define revisioned capsule states and allowed transitions, including quarantine, scanning, acceptance, publication, rejection, expiry, and withdrawal.
+- [ ] Make upload, scan, retry, withdrawal, and publication operations idempotent.
+- [ ] Attach versioned scan, provenance, and compatibility attestations to the exact artifact digest; preserve the evidence and policy version used for each publication decision.
+- [ ] Reject stale worker leases, scan evidence, revisions, and out-of-order transitions; recover abandoned work without changing capsule identity.
+- [ ] Publish through one atomic state transition only after the digest, ownership, metadata, current policy, and required attestations pass.
+- [ ] Define rescan, evidence-expiry, withdrawal, takedown, and republishing behavior without rewriting historical decisions.
+
 ## Milestone 3: Community tab
 
 - [x] Add an account icon to the client title bar that initiates the website login flow.
@@ -46,11 +57,23 @@ All project repositories live in the [Mars-Command](https://github.com/Mars-Comm
 - [ ] Browse and download public mod profiles, with an option to edit a downloaded profile as a separate personal profile without changing its public source.
   - [x] Implement public profile metadata search and independent private metadata copies in both interfaces; test using seeded public fixtures.
   - [ ] Implement verified mod-file download/install from a public profile.
+    - [ ] Download a specific published release capsule into bounded isolated staging; verify the backend-published SHA-256 and compatibility before making it launchable.
+    - [ ] Activate a fully verified capsule atomically and retain the prior verified version for explicit rollback; never modify the signed base pack or shared `.minecraft/mods`.
 - [ ] Allow users to add more client mods to personal profiles and optionally submit their own profile for publication.
 - [ ] Let users install and remove community mods into their own isolated Mars installation.
 - [ ] Verify downloaded files against their published checksums and warn or block when compatibility or integrity checks fail.
 - [ ] Show installed mod versions and make updates/removals explicit and reversible.
 - [ ] Add reporting controls, upload/scan queue status, and applicable takedown notifications.
+
+### Verified client activation
+
+- [ ] Define launcher-owned staging, immutable verified-generation, and activation-receipt layouts.
+- [ ] Verify the capsule digest, metadata, and defined compatibility requirements before activation.
+- [ ] Activate a complete generation atomically without modifying the signed base pack or shared `.minecraft/mods`.
+- [ ] Reconcile interrupted staging, activation, and rollback when the launcher starts.
+- [ ] Define a bounded post-activation health signal and do not mark a generation current until it passes.
+- [ ] Retain and explicitly expose the previous verified generation for bounded, user-controlled rollback.
+- [ ] Define client behavior when an installed capsule is later withdrawn, expires, or is taken down.
 
 ## Milestone 4: Donation-based server role
 
@@ -90,6 +113,16 @@ All project repositories live in the [Mars-Command](https://github.com/Mars-Comm
 - Before adopting VirusTotal, confirm permitted use and file-submission rights/disclosure. Its public API prohibits commercial products/services and business workflows that do not contribute new files. Select a permitted plan or alternative provider if needed.
 - Reference: [VirusTotal API restrictions](https://docs.virustotal.com/reference/public-vs-premium-api), [file submission](https://docs.virustotal.com/reference/files-scan), [analysis retrieval](https://docs.virustotal.com/reference/analysis), and [analysis object](https://docs.virustotal.com/reference/analyses-object).
 
+### Community release capsules (agreed 2026-10-08)
+
+- Treat each published mod version as an immutable capsule binding its exact artifact checksum to immutable release metadata. Store provenance, compatibility, and scan results as versioned attestations associated with that digest rather than rewriting the capsule.
+- A capsule must not become downloadable or installable until every publication requirement passes; scanner, storage, or quota failures leave it pending and unavailable.
+- Artifact deduplication may share bytes or scan work, but must not merge authorship, release history, permissions, or source-page requirements.
+- Publication decisions record the exact policy version and attestations used. Later rescans or policy changes add new evidence and may withdraw availability without erasing the historical decision.
+- The client stages a selected capsule separately from the signed base pack, verifies its published checksum and defined compatibility requirements, and exposes it to launches only after an all-or-nothing activation and bounded health check. Keep prior verified versions available for user-controlled rollback.
+- Client activation receipts record the capsule digest, verified generation, activation outcome, and rollback predecessor so interrupted operations can be reconciled deterministically.
+- The capsule's backend record is the trusted reference for which bytes and evidence belong to a release. A separate cryptographic signing format/key-distribution design is not selected yet and must not be implied by checksum verification alone.
+
 ### Reports and takedowns
 
 - Store incident metadata in a backend incident folder and mirror events to a private moderation Discord channel through a backend-only webhook.
@@ -113,6 +146,9 @@ All project repositories live in the [Mars-Command](https://github.com/Mars-Comm
 - GitHub OAuth is selected; the automatic desktop return/focus mechanism still needs a decision.
 - Bucket/edge-staging provider, durable queue, upload/archive limits, and retention periods.
 - Permitted scanning provider/plan, scan verdict and freshness policies, and verified account quotas.
+- Exact capsule API/schema and whether release records need an additional cryptographic signature beyond authenticated backend delivery and checksum verification.
+- Exact compatibility admission criteria: metadata agreement, dependency resolution, archive inspection, bounded test launch, or a defined combination.
+- Client behavior for already-installed capsules that are later withdrawn, expire, or are taken down, including offline launch and rollback rules.
 - Moderation permissions, incident naming allocation, notification recipients, and complete deletion semantics.
 - GitHub sponsorship recipient, verified account linking, and sponsorship eligibility.
 
@@ -125,9 +161,9 @@ The launcher already verifies and syncs the signed base pack into an isolated ga
 No whole Milestone 2, 3, or 4 is complete. Checked items above describe implemented
 and locally tested foundations, not a deployed-service certification.
 
-- [x] Review [backend report](../mars-command-backend/sub_report-backend.md): accepted for authentication, owner/private profile metadata APIs, and unconditional scan gating only.
-- [x] Review [website report](../mars-command-web/sub_report-website.md): accepted for identity confirmation, profile metadata management, and configured donation navigation only.
-- [x] Review [client report](sub_report-client.md): accepted for Rust-memory credentials, title-bar login, Community metadata management, and configured donation navigation only.
+- [x] Review [backend report](../doc/reports/sub_report-backend.md): accepted for authentication, owner/private profile metadata APIs, and unconditional scan gating only.
+- [x] Review [website report](../doc/reports/sub_report-website.md): accepted for identity confirmation, profile metadata management, and configured donation navigation only.
+- [x] Review [client report](../doc/reports/sub_report-client.md): accepted for Rust-memory credentials, title-bar login, Community metadata management, and configured donation navigation only.
 - [x] Independently validate the final backend revision: **45 tests passed**, including existing package regressions. One Starlette TestClient deprecation warning remains.
 - [x] Independently validate the final website revision: **49 tests passed**, production build and lint passed. A pre-existing development dependency advisory remains disclosed in its report.
 - [x] Independently validate the corrected launcher revision: **6 frontend tests and 56 Rust library tests passed**, production build and Rust formatting passed.

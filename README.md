@@ -82,6 +82,20 @@ Desktop community calls use the returned Bearer token, independently of existing
 
 Focused validation: `node --test src/lib/communityValidation.test.mjs`, `npm.cmd run build`, and from `src-tauri`, `cargo fmt --check` and `cargo test community::tests --lib`. Live OAuth, website approval, API deployment/configuration, Sponsors eligibility, and antivirus scanning require the corresponding deployed services and are not certified by these local checks.
 
+### Local community capsule foundation (no download/launch wiring)
+
+`src-tauri/src/community_capsules.rs` provides a local Rust library boundary for one selected release artifact. A future authenticated, publication-gated backend adapter must supply the opaque release identity and published lowercase SHA-256; these local types are **not a new backend schema**. Existing community profile entries do not establish release identity, publication, provenance/license binding, or completed scan evidence and are not install authorization.
+
+- Staging consumes a supplied byte stream, at most **64 MiB plus one overflow-detection byte**, into a temporary directory inside `.minecraft/mars-client/<pack-version>/.mars-command/community-capsules`. Failed/partial streams, wrong checksums, malformed archives and incompatible mods never become active. Nothing is extracted from an archive.
+- Compatibility uses the existing bounded NeoForge metadata/dependency/conflict validator and an explicitly supplied installed FML version. Unlike manual Personal Mods, capsules fail closed on missing Minecraft/NeoForge constraints, unresolved ranges, and bundled Jar-in-Jar modules. Metadata cannot prove safety, client-only behavior, or server acceptance.
+- A verified directory binds release identity separately from content checksum. At most **four retained versions** are allowed (including abandoned staging directories); a full store fails without deleting older bytes. Normal failure cleans temporary staging. Interrupted mutation locks fail closed and require manual inspection/recovery; automatic garbage collection is not implemented.
+- Activation rechecks bytes and compatibility, then atomically replaces one local activation record on the same filesystem. Prior verified versions remain intact. Explicit rollback rechecks the previous release and can recover even if the current artifact is damaged. A failed pre-commit operation preserves the previous activation record. This is atomic visibility, not a guarantee against power-loss/filesystem failure or hostile concurrent local filesystem edits.
+- The active-artifact accessor rechecks integrity and compatibility every time; staged-only artifacts are never returned. It is a future isolated-launch overlay input, **not integrated into Minecraft Launcher yet**. Signed pack files, the instance's existing `mods`, personal inventory and shared `.minecraft/mods` are never modified. There is no Tauri command, remote-install button or production HTTP download path.
+
+These are **unsigned checksum checks**, not capsule signature verification or antivirus scanning. End-to-end integration is blocked on an authenticated published-release/artifact endpoint and agreed release/provenance/license/scan-evidence contract, plus an isolated launch composition strategy that preserves the signed base and manual personal-mod behavior. No community routes are invented and the signed base-pack `/api/v1/files` route is not repurposed.
+
+Focused check (from `src-tauri`): `cargo test community_capsules::tests --lib`. The existing manual Personal Mods validator remains permissive about its disclosed compatibility warnings.
+
 ## Client Releases
 
 The **Build client installers** workflow runs when a `client-vX.Y.Z` tag is pushed. Before tagging, set the same `X.Y.Z` version in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`. The workflow validates those versions, builds a Windows NSIS installer and Linux Debian package, then publishes them as `setup-X.Y.Z.exe` and `setup-X.Y.Z.deb` assets on the GitHub release. Building the tagged release publishes it; do not push a tag until both installers are intended for release.

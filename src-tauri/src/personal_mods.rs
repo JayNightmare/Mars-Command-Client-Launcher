@@ -472,6 +472,19 @@ fn validate_bytes(
     jars: &[InstalledJar],
     entries: &[PersonalMod],
 ) -> Result<(PersonalMod, Vec<String>), String> {
+    validate_bytes_with_fml(root, manifest, name, bytes, own_name, jars, entries, None)
+}
+
+fn validate_bytes_with_fml(
+    root: &Path,
+    manifest: &Manifest,
+    name: &str,
+    bytes: &[u8],
+    own_name: Option<&str>,
+    jars: &[InstalledJar],
+    entries: &[PersonalMod],
+    fml_override: Option<&str>,
+) -> Result<(PersonalMod, Vec<String>), String> {
     protect_inventory_path(manifest)?;
     if !manifest.loader.eq_ignore_ascii_case("neoforge")
         || manifest.mods_dir.as_deref().unwrap_or("mods") != "mods"
@@ -544,7 +557,11 @@ fn validate_bytes(
     if parsed.has_bundled_jars {
         warnings.push("Bundled Jar-in-Jar modules are not inspected. NeoForge must resolve their dependencies and any additional conflicts at runtime.".into());
     }
-    match crate::settings::installed_fml_version(manifest)? {
+    let fml_version = match fml_override {
+        Some(version) => Some(version.to_string()),
+        None => crate::settings::installed_fml_version(manifest)?,
+    };
+    match fml_version {
         Some(version) => check_range("FML", &parsed.loader_version, &version, &mut warnings)?,
         None => warnings.push(format!(
             "Cannot determine installed FML version for loader range {}.",
@@ -670,6 +687,67 @@ fn validate_bytes(
         },
         warnings,
     ))
+}
+
+pub(crate) fn capsule_compatibility(
+    root: &Path,
+    manifest: &Manifest,
+    source: &Path,
+    fml_version: &str,
+) -> Result<(), String> {
+    if root.file_name().and_then(|name| name.to_str()) != Some(&manifest.pack_version) {
+        return Err("Capsules require the current versioned Mars instance".into());
+    }
+    let bytes = jar_bytes(source)?;
+    let parsed = descriptor(&bytes)?;
+    for info in &parsed.mods {
+        for (id, version) in [
+            ("minecraft", manifest.minecraft_version.as_str()),
+            ("neoforge", manifest.loader_version.as_str()),
+        ] {
+            let supported = parsed
+                .dependencies
+                .get(&info.mod_id)
+                .is_some_and(|dependencies| {
+                    dependencies.iter().any(|dependency| {
+                        dependency.mod_id == id
+                            && dependency.side.as_deref() != Some("SERVER")
+                            && dependency.kind.as_deref().unwrap_or(
+                                if dependency.mandatory == Some(false) {
+                                    "optional"
+                                } else {
+                                    "required"
+                                },
+                            ) == "required"
+                            && range_matches(&dependency.version_range, version) == Some(true)
+                    })
+                });
+            if !supported {
+                return Err(format!(
+                    "Capsule mod {} needs an explicit supported client {id} requirement",
+                    info.mod_id
+                ));
+            }
+        }
+    }
+    let (_, warnings) = validate_bytes_with_fml(
+        root,
+        manifest,
+        "capsule.jar",
+        &bytes,
+        None,
+        &installed_jars(root, manifest)?,
+        &inventory(root)?,
+        Some(fml_version),
+    )?;
+    if warnings.iter().any(|warning| {
+        warning.starts_with("Cannot conclusively")
+            || warning.starts_with("No client ")
+            || warning.starts_with("Bundled Jar-in-Jar")
+    }) {
+        return Err("Capsule compatibility is unresolved; explicit supported constraints and no bundled modules are required".into());
+    }
+    Ok(())
 }
 
 pub fn preview(root: &Path, manifest: &Manifest, source: &Path) -> Result<Preview, String> {

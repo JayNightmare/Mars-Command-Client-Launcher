@@ -1,4 +1,5 @@
 mod community;
+pub mod community_capsules;
 mod integrity;
 pub mod manifest;
 mod minecraft;
