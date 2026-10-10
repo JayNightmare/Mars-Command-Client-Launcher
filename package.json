@@ -1,11 +1,12 @@
 {
 	"name": "mars-command-client",
 	"private": true,
-	"version": "1.3.0",
+	"version": "1.4.0",
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
 		"build": "tsc && vite build",
+		"test:community": "node --test src/lib/accountErrors.test.mjs src/lib/communityValidation.test.mjs src/lib/capsuleValidation.test.mjs",
 		"preview": "vite preview",
 		"tauri": "tauri"
 	},

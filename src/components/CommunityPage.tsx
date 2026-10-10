@@ -7,6 +7,7 @@ import { ACCOUNT_REFRESH_FAILURE, withSecondaryFailure } from "../lib/accountErr
 import type { CommunityProfile, ProfileInput, ProfileMod } from "../types/community";
 import { AccountPanel } from "./AccountPanel";
 import { Panel } from "./Panel";
+import { CapsuleSubmissions } from "./CapsuleSubmissions";
 
 const button = "rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-40";
 const field = "w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-xs text-slate-100";
@@ -98,6 +99,7 @@ export function CommunityPage({ account }: { account: CommunityAccount }) {
 	return (
 		<section className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
 			<AccountPanel account={account} />
+			<CapsuleSubmissions key={`${account.sessionEpoch}:${account.user?.id ?? "signed-out"}`} account={account} />
 			<Panel title="Community profiles" icon={<Users size={14} />}>
 				<div className="space-y-3 text-xs text-slate-300">
 					<p className="text-slate-400">Browse public metadata or manage private personal profiles. Copying metadata does not download, install, verify, or scan mod files. Verified community file installation is not available in this batch.</p>

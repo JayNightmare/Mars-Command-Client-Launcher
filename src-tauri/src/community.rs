@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::State;
 use url::Url;
+
+#[path = "community_submissions.rs"]
+pub mod submissions;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,17 +100,19 @@ struct Session {
     pending: Option<PendingLogin>,
     token: Option<String>,
     user: Option<User>,
+    selection: Option<submissions::SelectedJar>,
+    uploading: bool,
 }
 
 pub struct CommunityState {
-    session: Mutex<Session>,
+    session: Arc<Mutex<Session>>,
     client: reqwest::Client,
 }
 
 impl Default for CommunityState {
     fn default() -> Self {
         Self {
-            session: Mutex::new(Session::default()),
+            session: Arc::new(Mutex::new(Session::default())),
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(20))
                 .redirect(reqwest::redirect::Policy::none())
@@ -264,6 +269,8 @@ async fn start_login(
         session.pending = None;
         session.token = None;
         session.user = None;
+        session.selection = None;
+        session.uploading = false;
         session.generation
     };
     let response: DeviceResponse = json_response(

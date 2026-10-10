@@ -8,6 +8,7 @@ export function useCommunityAccount() {
 	const [user, setUser] = useState<CommunityUser | null>(null);
 	const [pending, setPending] = useState(false);
 	const [message, setMessage] = useState("");
+	const [sessionEpoch, setSessionEpoch] = useState(0);
 	const generation = useRef(0);
 	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	const busy = useRef(false);
@@ -16,7 +17,10 @@ export function useCommunityAccount() {
 	const refresh = useCallback(async () => {
 		const current = generation.current;
 		const identity = await invoke<CommunityUser | null>("desktop_account");
-		if (current === generation.current) setUser(identity);
+		if (current === generation.current) {
+			setUser(identity);
+			if (!identity) setSessionEpoch((epoch) => epoch + 1);
+		}
 		return identity;
 	}, []);
 
@@ -42,6 +46,7 @@ export function useCommunityAccount() {
 		busy.current = false;
 		setPending(false);
 		setUser(null);
+		setSessionEpoch((epoch) => epoch + 1);
 		try {
 			await invoke("desktop_logout");
 			setMessage("Desktop session cleared. Website login is independent.");
@@ -55,6 +60,8 @@ export function useCommunityAccount() {
 		busy.current = true;
 		clearTimer();
 		const attempt = ++generation.current;
+		setUser(null);
+		setSessionEpoch((epoch) => epoch + 1);
 		setPending(true);
 		setMessage("Starting website GitHub sign-in…");
 		try {
@@ -134,7 +141,7 @@ export function useCommunityAccount() {
 		}
 	}, [login, user]);
 
-	return { user, pending, message, login, logout, donate, refresh };
+	return { user, pending, message, login, logout, donate, refresh, sessionEpoch };
 }
 
 export type CommunityAccount = ReturnType<typeof useCommunityAccount>;

@@ -237,8 +237,12 @@ fn jar_bytes(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 fn descriptor(bytes: &[u8]) -> Result<Descriptor, String> {
-    let mut jar = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .map_err(|e| error("Not a valid JAR/ZIP archive", e))?;
+    descriptor_reader(std::io::Cursor::new(bytes))
+}
+
+fn descriptor_reader(reader: impl Read + std::io::Seek) -> Result<Descriptor, String> {
+    let mut jar =
+        zip::ZipArchive::new(reader).map_err(|e| error("Not a valid JAR/ZIP archive", e))?;
     if jar.len() > 50_000 {
         return Err("JAR contains too many entries".into());
     }
@@ -313,6 +317,10 @@ fn descriptor(bytes: &[u8]) -> Result<Descriptor, String> {
         return Err("Forge-only metadata does not declare NeoForge compatibility".into());
     }
     Ok(parsed)
+}
+
+pub(crate) fn submission_mod_ids(file: &mut fs::File) -> Result<Vec<String>, String> {
+    descriptor_reader(file).map(|metadata| metadata.mods.into_iter().map(|m| m.mod_id).collect())
 }
 
 fn numeric_version(version: &str) -> Option<Vec<u64>> {

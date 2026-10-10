@@ -82,6 +82,20 @@ Desktop community calls use the returned Bearer token, independently of existing
 
 Focused validation: `node --test src/lib/communityValidation.test.mjs`, `npm.cmd run build`, and from `src-tauri`, `cargo fmt --check` and `cargo test community::tests --lib`. Live OAuth, website approval, API deployment/configuration, Sponsors eligibility, and antivirus scanning require the corresponding deployed services and are not certified by these local checks.
 
+### Private capsule submission/status (Batch 3, client 1.4.0)
+
+The Community tab now reserves immutable release metadata, selects a JAR through the native picker, and uploads it to the backend's private quarantine. Project/version/source URL and an explicit permission acknowledgement are required. The opaque native selection exposes only filename, bounded size, local preview SHA-256 and mod IDs; paths and bearer credentials remain in Rust. Existing bounded NeoForge metadata parsing is reused without copying, installing, extracting or activating the JAR.
+
+Rust revalidates the selection, hashes and streams the same file handle in at most 64 KiB chunks with a fixed length, a 64 MiB desktop ceiling and a five-minute transfer timeout. Progress measures bytes read by the transport, **not server acceptance**. Only a validated backend response confirms the independently observed artifact digest. Interrupted uploads preserve the selection; refresh the release before retrying. Retrying unchanged reservation metadata reuses the same idempotency key; editing it creates a new key.
+
+Owner-scoped list/status refresh, bounded blocked-scan retry, and confirmed withdrawal are available. Logout, re-login (even the same user), and HTTP 401 clear stale account/selection/submission state. Malformed, foreign-owner, public-download and immutable-fact-changing responses fail closed. Older revisions cannot overwrite newer status.
+
+`MARS_COMMUNITY_API_BASE` also serves `POST /api/community/capsules`, `GET /api/community/capsules/mine`, `GET /api/community/capsules/{releaseId}`, streamed `PUT /api/community/capsules/{releaseId}/artifact`, and bodyless `POST` retry/withdraw suffixes. Reservation requires `Idempotency-Key`. The backend enforces ownership, strict public HTTPS metadata, operator-configurable size/active limits (defaults 64 MiB/10), seven-day abandoned/failed expiry, private filesystem storage, durable queue and scan policy. Desktop configuration contains no bucket paths or scanner credentials.
+
+`scan_blocked` explicitly means private/unpublished, including disabled-scanner results. `rejected` is terminal; retry is offered only for blocked jobs with attempts remaining. `publishable` means eligible for a future publication step, **not downloadable or installable**. No production-clean fallback, publication, download, cryptographic signing or launch wiring is added. The local foundation below remains separate.
+
+Focused validation: `npm.cmd run test:community`, `npm.cmd run build`, and from `src-tauri`, `cargo fmt --check`, `cargo check --lib`, and `cargo test --lib`. See `doc/reports/batch-3-native-client.md` for actual results and deployment limitations.
+
 ### Local community capsule foundation (no download/launch wiring)
 
 `src-tauri/src/community_capsules.rs` provides a local Rust library boundary for one selected release artifact. A future authenticated, publication-gated backend adapter must supply the opaque release identity and published lowercase SHA-256; these local types are **not a new backend schema**. Existing community profile entries do not establish release identity, publication, provenance/license binding, or completed scan evidence and are not install authorization.
@@ -101,6 +115,8 @@ Focused check (from `src-tauri`): `cargo test community_capsules::tests --lib`. 
 The **Build client installers** workflow runs when a `client-vX.Y.Z` tag is pushed. Before tagging, set the same `X.Y.Z` version in `package.json`, both root entries in `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the `mars-command-client` package entry in `src-tauri/Cargo.lock`. The workflow validates all of those surfaces, builds a Windows NSIS installer and Linux Debian package, then publishes them as `setup-X.Y.Z.exe` and `setup-X.Y.Z.deb` assets on the GitHub release. Building the tagged release publishes it; do not push a tag until both installers are intended for release.
 
 Batch 2 client release candidate **1.3.0** hardens the existing session-only GitHub desktop authorization flow, private profile metadata proxy/UX, configured Sponsors navigation, and local capsule staging/activation/rollback boundary. It does not add live capsule upload, download, scanning, publication, backend capsule endpoints, or cryptographic capsule signing.
+
+Batch 3 client **1.4.0** adds the private native reservation/upload/status experience described above. It requires the Batch 3 backend capsule contract; it does not publish artifacts or connect submissions to installation/launch.
 
 The in-app client update check uses stable, non-prerelease GitHub releases and selects the newest installer compatible with the current platform: `setup-X.Y.Z.exe` on Windows or `setup-X.Y.Z.deb` on Linux. For older releases it also accepts `setup.exe` or `setup.deb` when the release tag contains a valid version; a versioned asset is preferred when both names are published. Drafts, prereleases, unsupported platforms, and assets for another platform are not offered.
 
